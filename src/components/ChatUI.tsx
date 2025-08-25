@@ -95,8 +95,8 @@ export default function ChatUI() {
         }
     };
 
-    const currentHandleInputChange = (e: any) => setLocalInput(e.target.value);
-    const currentHandleSubmit = async (e: any) => {
+    const currentHandleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => setLocalInput(e.target.value);
+    const currentHandleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
         await sendMessage(localInput);
     };

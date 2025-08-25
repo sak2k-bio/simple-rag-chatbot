@@ -1,9 +1,9 @@
 import { NextRequest } from 'next/server';
 import { google } from '@ai-sdk/google';
 import { embed, streamText } from 'ai';
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import { searchQdrant } from '@/lib/qdrant';
-import { buildRagPrompt } from '@/lib/prompt';
+import { buildRagPrompt, SYSTEM_PROMPT } from '@/lib/prompt';
+import { logChatEvent } from '@/lib/supabase';
 
 export const runtime = 'edge';
 
@@ -16,12 +16,13 @@ export async function POST(req: NextRequest) {
         console.log('API route called');
         console.log('Environment check:', {
             hasGoogleKey: !!process.env.GOOGLE_GENERATIVE_AI_API_KEY,
+            hasGoogleApiKey: !!process.env.GOOGLE_API_KEY,
             hasQdrantUrl: !!process.env.QDRANT_URL,
             hasQdrantKey: !!process.env.QDRANT_API_KEY,
             hasQdrantCollection: !!process.env.QDRANT_COLLECTION
         });
 
-        const { messages } = await req.json();
+        const { messages } = (await req.json()) as { messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> };
         console.log('Messages received:', messages);
 
         if (!messages || messages.length === 0) {
@@ -35,8 +36,13 @@ export async function POST(req: NextRequest) {
             return new Response('No user message provided', { status: 400 });
         }
 
-        if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
-            return new Response('Missing GOOGLE_GENERATIVE_AI_API_KEY', { status: 500 });
+        const googleApiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GOOGLE_API_KEY;
+        if (!googleApiKey) {
+            return new Response('Missing Google API key (set GOOGLE_GENERATIVE_AI_API_KEY or GOOGLE_API_KEY)', { status: 500 });
+        }
+        // Ensure the AI SDK picks up the key via the expected env var
+        if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY && process.env.GOOGLE_API_KEY) {
+            process.env.GOOGLE_GENERATIVE_AI_API_KEY = process.env.GOOGLE_API_KEY;
         }
 
         let context = '';
@@ -72,7 +78,7 @@ export async function POST(req: NextRequest) {
         }
 
         // Convert messages to the format expected by streamText
-        const aiMessages = messages.map((msg: any) => ({
+        const aiMessages = messages.map((msg) => ({
             role: msg.role,
             content: msg.content
         }));
@@ -90,17 +96,30 @@ export async function POST(req: NextRequest) {
 
         const result = await streamText({
             model: google('gemini-1.5-flash'),
-            system: 'You are a helpful AI assistant. Answer questions based on the provided context when available. Be conversational and helpful.',
+            system: SYSTEM_PROMPT,
             messages: aiMessages,
+            onFinish: async ({ text }) => {
+                // Fire-and-forget logging with full text
+                void logChatEvent({
+                    user_message: userMessage,
+                    model: 'gemini-1.5-flash',
+                    used_context: Boolean(context),
+                    context_preview: context ? context.slice(0, 1000) : null,
+                    response_preview: (text || '').slice(0, 2000),
+                    metadata: null,
+                });
+            },
         });
 
         console.log('Gemini response received, returning stream');
 
         // Return the streaming response in the format expected by useChat v5
         return result.toTextStreamResponse();
-    } catch (err: any) {
+    } catch (err) {
+        // Narrow error typing safely
+        const message = err instanceof Error ? err.message : 'unknown error';
         console.error('API Error:', err);
-        return new Response(`Error: ${err?.message || 'unknown error'}`, { status: 500 });
+        return new Response(`Error: ${message}`, { status: 500 });
     }
 }
 

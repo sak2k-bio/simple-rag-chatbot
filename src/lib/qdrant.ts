@@ -8,10 +8,21 @@ export function getQdrantClient() {
     return new QdrantClient({ url, apiKey });
 }
 
+export interface QdrantPointPayload {
+    [key: string]: unknown;
+    text?: string;
+    content?: string;
+}
+
+export interface QdrantSearchHit {
+    score: number;
+    payload: QdrantPointPayload;
+}
+
 export async function searchQdrant(
     vector: number[],
     opts?: { collection?: string; limit?: number; scoreThreshold?: number }
-) {
+): Promise<QdrantSearchHit[]> {
     const client = getQdrantClient();
     const collection = opts?.collection || process.env.QDRANT_COLLECTION;
     if (!collection) throw new Error('QDRANT_COLLECTION is not set');
@@ -21,11 +32,18 @@ export async function searchQdrant(
         limit: opts?.limit ?? 5,
         with_payload: true,
         score_threshold: opts?.scoreThreshold,
-    });
+    }) as unknown;
 
-    return (res || []).map((p: any) => ({
-        score: p.score as number,
-        payload: p.payload as Record<string, any>,
+    // Normalize different client response shapes (Edge fetch vs Node runtime)
+    type SearchPoint = { score: number; payload: QdrantPointPayload };
+    type SearchEnvelope = { result?: SearchPoint[] };
+    const points: SearchPoint[] = Array.isArray(res)
+        ? (res as SearchPoint[])
+        : (((res as SearchEnvelope)?.result as SearchPoint[] | undefined) ?? []);
+
+    return (points || []).map((p) => ({
+        score: p.score,
+        payload: p.payload,
     }));
 }
 

@@ -2,8 +2,6 @@ export const SYSTEM_PROMPT = `You are a concise, helpful assistant. Answer based
 
 export function buildRagPrompt(context: string, userInput: string): string {
   return [
-    `System: ${SYSTEM_PROMPT}`,
-    '',
     'Context:',
     context || '(no relevant context found)',
     '',
