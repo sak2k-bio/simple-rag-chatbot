@@ -1,36 +1,73 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Simple Chatbot
 
-## Getting Started
+A Next.js chatbot application powered by Google's Gemini AI and optionally Qdrant for RAG (Retrieval Augmented Generation).
 
-First, run the development server:
+## Features
+
+- 🤖 AI-powered conversations using Google Gemini
+- 🔍 Optional RAG functionality with Qdrant vector database
+- 💬 Real-time streaming chat interface
+- 🎨 Modern UI with Tailwind CSS
+
+## Setup
+
+### 1. Install Dependencies
+
+```bash
+npm install
+```
+
+### 2. Environment Variables
+
+Create a `.env.local` file in the root directory with the following variables:
+
+```bash
+# Google AI API Key (Required)
+# Get this from: https://makersuite.google.com/app/apikey
+GOOGLE_GENERATIVE_AI_API_KEY=your_google_ai_api_key_here
+
+# Qdrant Vector Database (Optional - for RAG functionality)
+# If not set, the chatbot will work without RAG features
+QDRANT_URL=http://localhost:6333
+QDRANT_API_KEY=your_qdrant_api_key_here
+QDRANT_COLLECTION=your_collection_name_here
+```
+
+### 3. Run the Development Server
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## How It Works
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. **Basic Chat**: The chatbot will work with just the Google AI API key
+2. **RAG Enhancement**: If Qdrant is configured, the chatbot will:
+   - Convert user messages to embeddings
+   - Search for relevant context in your vector database
+   - Use that context to provide more informed responses
 
-## Learn More
+## Troubleshooting
 
-To learn more about Next.js, take a look at the following resources:
+### No Responses from AI
+- Check that `GOOGLE_GENERATIVE_AI_API_KEY` is set correctly
+- Verify your Google AI API key has sufficient credits/quota
+- Check browser console for any error messages
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Qdrant Errors
+- If you see Qdrant-related errors, the chatbot will fall back to basic chat mode
+- Ensure all Qdrant environment variables are set if you want RAG functionality
+- Verify your Qdrant instance is running and accessible
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## API Endpoints
 
-## Deploy on Vercel
+- `POST /api/chat` - Main chat endpoint that accepts messages and returns streaming responses
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Technologies Used
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- **Frontend**: Next.js 15, React 19, Tailwind CSS
+- **AI**: Google Gemini via @ai-sdk/google
+- **Vector Database**: Qdrant (optional)
+- **Chat Interface**: @ai-sdk/react useChat hook
