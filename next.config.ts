@@ -43,10 +43,7 @@ const nextConfig: NextConfig = {
     ];
   },
   
-  // Environment variables validation (REMOVE THIS IF RUNNING LOCALLY)
-  // env: {
-  //   NODE_ENV: process.env.NODE_ENV,
-  // },
+
   
   // Experimental features for better performance
   experimental: {
