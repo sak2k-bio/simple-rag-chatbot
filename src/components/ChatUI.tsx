@@ -20,6 +20,26 @@ interface Source {
     };
 }
 
+interface SupabaseMessage {
+    id: string;
+    role: 'user' | 'assistant';
+    content: string;
+    sources?: Source[];
+    timestamp: string;
+}
+
+interface SessionMessage {
+    session_id: string;
+    content: string;
+    timestamp: string;
+}
+
+interface SourceData {
+    source: string;
+    score: number;
+    used: boolean;
+}
+
 export default function ChatUI() {
     const [isClient, setIsClient] = useState(false);
     const listRef = useRef<HTMLDivElement>(null);
@@ -84,7 +104,7 @@ export default function ChatUI() {
                 } else if (previousMessages && previousMessages.length > 0) {
                     console.log(`Loaded ${previousMessages.length} messages from Supabase for session: ${sessionId}`);
 
-                    const mappedMessages = previousMessages.map((msg: any) => ({
+                    const mappedMessages = previousMessages.map((msg: SupabaseMessage) => ({
                         id: msg.id,
                         role: msg.role as 'user' | 'assistant',
                         content: msg.content,
@@ -95,7 +115,7 @@ export default function ChatUI() {
                     setMessages(mappedMessages);
 
                     // Set up conversation context for memory persistence
-                    const context = mappedMessages.map((msg: any) => ({
+                    const context = mappedMessages.map((msg: SupabaseMessage) => ({
                         role: msg.role,
                         content: msg.content
                     }));
@@ -128,7 +148,7 @@ export default function ChatUI() {
 
             // Group messages by session and get session info
             const sessionMap = new Map();
-            sessions?.forEach((msg: any) => {
+            sessions?.forEach((msg: SessionMessage) => {
                 if (!sessionMap.has(msg.session_id)) {
                     sessionMap.set(msg.session_id, {
                         id: msg.session_id,
@@ -170,7 +190,7 @@ export default function ChatUI() {
                     console.error('Error loading session messages:', error);
                     setMessages([]);
                 } else if (sessionMessages && sessionMessages.length > 0) {
-                    const mappedMessages = sessionMessages.map((msg: any) => ({
+                    const mappedMessages = sessionMessages.map((msg: SupabaseMessage) => ({
                         id: msg.id,
                         role: msg.role as 'user' | 'assistant',
                         content: msg.content,
@@ -180,7 +200,7 @@ export default function ChatUI() {
                     setMessages(mappedMessages);
 
                     // Set up conversation context for the new session
-                    const context = mappedMessages.map((msg: any) => ({
+                    const context = mappedMessages.map((msg: SupabaseMessage) => ({
                         role: msg.role,
                         content: msg.content
                     }));
@@ -302,7 +322,7 @@ export default function ChatUI() {
                     console.log('✅ Found sources metadata:', sourcesData);
                     
                     if (sourcesData.type === 'sources_metadata' && sourcesData.sources) {
-                        parsedSources = sourcesData.sources.map((s: any) => ({
+                        parsedSources = sourcesData.sources.map((s: SourceData) => ({
                             pageContent: '',
                             metadata: {
                                 source: s.source,
@@ -511,10 +531,10 @@ export default function ChatUI() {
                                  {/* Quick Tips */}
                  <div className="mb-3 p-2 bg-yellow-50 border border-yellow-200 rounded">
                      <p className="text-xs text-yellow-800">
-                         <strong>💡 Quick Tips:</strong> Start with "Balanced" (0.05) for most queries. Use "Very Precise" (0.08-0.10) for specific technical questions. Use "Very Flexible" (0.01-0.03) when you want broader context. If no sources are found, try lowering the threshold.
+                         <strong>💡 Quick Tips:</strong> Start with &quot;Balanced&quot; (0.05) for most queries. Use &quot;Very Precise&quot; (0.08-0.10) for specific technical questions. Use &quot;Very Flexible&quot; (0.01-0.03) when you want broader context. If no sources are found, try lowering the threshold.
                      </p>
                      <p className="text-xs text-yellow-700 mt-1">
-                         <strong>🔍 Source Visibility:</strong> You'll see ALL retrieved sources below each answer - green ones were used, gray ones were below your threshold.
+                         <strong>🔍 Source Visibility:</strong> You&apos;ll see ALL retrieved sources below each answer - green ones were used, gray ones were below your threshold.
                      </p>
                  </div>
                 
@@ -897,7 +917,7 @@ export default function ChatUI() {
                                                              )}
                                                          </div>
                                                          <div className="text-xs text-gray-500 text-center mt-2">
-                                                             💡 These sources were retrieved but didn't meet your relevance threshold of {similarityThreshold.toFixed(2)}
+                                                             💡 These sources were retrieved but didn&apos;t meet your relevance threshold of {similarityThreshold.toFixed(2)}
                                                          </div>
                                                      </>
                                                  )}

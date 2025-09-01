@@ -1,11 +1,20 @@
 import { getSupabaseClient } from '@/lib/supabase';
 import { testQdrantConnection } from '@/lib/qdrant';
 
+interface HealthCheck {
+  status: string;
+  responseTime: number;
+  error?: string;
+}
+
 export async function GET() {
   const startTime = Date.now();
   
   try {
-    const healthChecks = {
+    const healthChecks: {
+      supabase: HealthCheck;
+      qdrant: HealthCheck;
+    } = {
       supabase: { status: 'unknown', responseTime: 0 },
       qdrant: { status: 'unknown', responseTime: 0 },
     };

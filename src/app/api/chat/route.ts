@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
         }
 
         let context = '';
-        let sources: Array<{ pageContent: string; metadata: { source: string; score: number; [key: string]: any } }> = [];
+        let sources: Array<{ pageContent: string; metadata: { source: string; score: number; [key: string]: unknown } }> = [];
 
         // Try to get context from Qdrant if available
         try {

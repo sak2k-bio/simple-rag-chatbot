@@ -1,4 +1,33 @@
 import { QdrantClient } from '@qdrant/js-client-rest';
+
+interface SearchParams {
+    vector: number[];
+    limit: number;
+    score_threshold?: number;
+    with_payload?: boolean;
+    with_vectors?: boolean;
+    filter?: {
+        must: Array<{
+            key: string;
+            match: { value: unknown };
+        }>;
+    };
+}
+
+interface QdrantResponse {
+    result?: Array<{
+        id: string | number;
+        score: number;
+        payload?: Record<string, unknown>;
+        vector?: number[];
+    }>;
+    points?: Array<{
+        id: string | number;
+        score: number;
+        payload?: Record<string, unknown>;
+        vector?: number[];
+    }>;
+}
 import { embed } from 'ai';
 import { google } from '@ai-sdk/google';
 
@@ -54,12 +83,12 @@ export async function searchQdrant(
 
     // Add score threshold if specified
     if (opts?.scoreThreshold !== undefined) {
-        (searchParams as any).score_threshold = opts.scoreThreshold;
+        (searchParams as SearchParams).score_threshold = opts.scoreThreshold;
     }
 
     console.log(`Searching Qdrant collection '${collection}' with params:`, searchParams);
 
-    const res = await client.search(collection, searchParams) as unknown;
+    const res = await client.search(collection, searchParams) as QdrantResponse;
 
     // Normalize different client response shapes (Edge fetch vs Node runtime)
     type SearchPoint = { score: number; payload: QdrantPointPayload };
@@ -74,9 +103,9 @@ export async function searchQdrant(
     if (points.length === 0 && opts?.scoreThreshold !== undefined) {
         console.log(`No results with threshold ${opts.scoreThreshold}, trying without threshold...`);
         const noThresholdParams = { ...searchParams };
-        delete (noThresholdParams as any).score_threshold;
+        delete (noThresholdParams as SearchParams).score_threshold;
         
-        const noThresholdRes = await client.search(collection, noThresholdParams) as unknown;
+        const noThresholdRes = await client.search(collection, noThresholdParams) as QdrantResponse;
         const noThresholdPoints: SearchPoint[] = Array.isArray(noThresholdRes)
             ? (noThresholdRes as SearchPoint[])
             : (((noThresholdRes as SearchEnvelope)?.result as SearchPoint[] | undefined) ?? []);
@@ -96,7 +125,7 @@ export async function searchQdrant(
 // Enhanced search with metadata filtering
 export async function searchQdrantWithMetadata(
     vector: number[],
-    metadataFilters?: Record<string, any>,
+    metadataFilters?: Record<string, unknown>,
     opts?: { 
         collection?: string; 
         limit?: number; 
@@ -107,7 +136,7 @@ export async function searchQdrantWithMetadata(
     const collection = opts?.collection || process.env.QDRANT_COLLECTION;
     if (!collection) throw new Error('QDRANT_COLLECTION is not set');
 
-    const searchParams: any = {
+    const searchParams: SearchParams = {
         vector,
         limit: opts?.limit ?? 5,
         with_payload: true,
@@ -131,7 +160,7 @@ export async function searchQdrantWithMetadata(
 
     console.log(`Searching Qdrant with metadata filters:`, metadataFilters);
 
-    const res = await client.search(collection, searchParams) as unknown;
+    const res = await client.search(collection, searchParams) as QdrantResponse;
 
     // Normalize response
     type SearchPoint = { score: number; payload: QdrantPointPayload };
@@ -259,7 +288,7 @@ export async function analyzeSimilarityScores(
         }
     };
 
-    const res = await client.search(collection, searchParams) as unknown;
+    const res = await client.search(collection, searchParams) as QdrantResponse;
     
     // Normalize response
     type SearchPoint = { score: number; payload: QdrantPointPayload };
