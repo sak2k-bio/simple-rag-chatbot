@@ -12,6 +12,11 @@ export interface QdrantPointPayload {
     [key: string]: unknown;
     text?: string;
     content?: string;
+    metadata?: {
+        source?: string;
+        title?: string;
+        [key: string]: unknown;
+    };
 }
 
 export interface QdrantSearchHit {
@@ -21,20 +26,107 @@ export interface QdrantSearchHit {
 
 export async function searchQdrant(
     vector: number[],
-    opts?: { collection?: string; limit?: number; scoreThreshold?: number }
+    opts?: { 
+        collection?: string; 
+        limit?: number; 
+        scoreThreshold?: number;
+        withPayload?: boolean;
+        withVectors?: boolean;
+    }
 ): Promise<QdrantSearchHit[]> {
     const client = getQdrantClient();
     const collection = opts?.collection || process.env.QDRANT_COLLECTION;
     if (!collection) throw new Error('QDRANT_COLLECTION is not set');
 
-    const res = await client.search(collection, {
+    const searchParams = {
+        vector,
+        limit: opts?.limit ?? 5,
+        with_payload: opts?.withPayload ?? true,
+        with_vectors: opts?.withVectors ?? false,
+    };
+
+    // Add score threshold if specified
+    if (opts?.scoreThreshold !== undefined) {
+        (searchParams as any).score_threshold = opts.scoreThreshold;
+    }
+
+    console.log(`Searching Qdrant collection '${collection}' with params:`, searchParams);
+
+    const res = await client.search(collection, searchParams) as unknown;
+
+    // Normalize different client response shapes (Edge fetch vs Node runtime)
+    type SearchPoint = { score: number; payload: QdrantPointPayload };
+    type SearchEnvelope = { result?: SearchPoint[] };
+    const points: SearchPoint[] = Array.isArray(res)
+        ? (res as SearchPoint[])
+        : (((res as SearchEnvelope)?.result as SearchPoint[] | undefined) ?? []);
+
+    console.log(`Qdrant search returned ${points.length} results with scores:`, points.map(p => p.score));
+    
+    // Debug: If no results, try with no threshold to see what scores we get
+    if (points.length === 0 && opts?.scoreThreshold !== undefined) {
+        console.log(`No results with threshold ${opts.scoreThreshold}, trying without threshold...`);
+        const noThresholdParams = { ...searchParams };
+        delete (noThresholdParams as any).score_threshold;
+        
+        const noThresholdRes = await client.search(collection, noThresholdParams) as unknown;
+        const noThresholdPoints: SearchPoint[] = Array.isArray(noThresholdRes)
+            ? (noThresholdRes as SearchPoint[])
+            : (((noThresholdRes as SearchEnvelope)?.result as SearchPoint[] | undefined) ?? []);
+        
+        if (noThresholdPoints.length > 0) {
+            console.log(`Without threshold: ${noThresholdPoints.length} results with scores:`, noThresholdPoints.map(p => p.score));
+            console.log(`Top 3 scores:`, noThresholdPoints.slice(0, 3).map(p => p.score));
+        }
+    }
+
+    return (points || []).map((p) => ({
+        score: p.score,
+        payload: p.payload,
+    }));
+}
+
+// Enhanced search with metadata filtering
+export async function searchQdrantWithMetadata(
+    vector: number[],
+    metadataFilters?: Record<string, any>,
+    opts?: { 
+        collection?: string; 
+        limit?: number; 
+        scoreThreshold?: number;
+    }
+): Promise<QdrantSearchHit[]> {
+    const client = getQdrantClient();
+    const collection = opts?.collection || process.env.QDRANT_COLLECTION;
+    if (!collection) throw new Error('QDRANT_COLLECTION is not set');
+
+    const searchParams: any = {
         vector,
         limit: opts?.limit ?? 5,
         with_payload: true,
-        score_threshold: opts?.scoreThreshold,
-    }) as unknown;
+        with_vectors: false,
+    };
 
-    // Normalize different client response shapes (Edge fetch vs Node runtime)
+    // Add score threshold if specified
+    if (opts?.scoreThreshold !== undefined) {
+        searchParams.score_threshold = opts.scoreThreshold;
+    }
+
+    // Add metadata filters if specified
+    if (metadataFilters && Object.keys(metadataFilters).length > 0) {
+        searchParams.filter = {
+            must: Object.entries(metadataFilters).map(([key, value]) => ({
+                key: `metadata.${key}`,
+                match: { value }
+            }))
+        };
+    }
+
+    console.log(`Searching Qdrant with metadata filters:`, metadataFilters);
+
+    const res = await client.search(collection, searchParams) as unknown;
+
+    // Normalize response
     type SearchPoint = { score: number; payload: QdrantPointPayload };
     type SearchEnvelope = { result?: SearchPoint[] };
     const points: SearchPoint[] = Array.isArray(res)
@@ -45,6 +137,77 @@ export async function searchQdrant(
         score: p.score,
         payload: p.payload,
     }));
+}
+
+// Get collection statistics
+export async function getCollectionStats(collection?: string) {
+    const client = getQdrantClient();
+    const collectionName = collection || process.env.QDRANT_COLLECTION;
+    if (!collectionName) throw new Error('QDRANT_COLLECTION is not set');
+
+    try {
+        const info = await client.getCollection(collectionName);
+        return {
+            success: true,
+            collectionName,
+            exists: true,
+            stats: {
+                totalVectors: info.points_count || 0,
+                indexedVectors: info.indexed_vectors_count || 0,
+                vectorSize: info.config?.params?.vectors?.size || 0
+            },
+            config: info.config
+        };
+    } catch (error) {
+        console.error('Error getting collection stats:', error);
+        return {
+            success: false,
+            error: error instanceof Error ? error.message : 'Unknown error'
+        };
+    }
+}
+
+// Test Qdrant connection
+export async function testQdrantConnection() {
+    try {
+        const client = getQdrantClient();
+        await client.getCollections();
+        return { success: true, message: 'Qdrant connection successful' };
+    } catch (error) {
+        console.error('Qdrant connection test failed:', error);
+        return { 
+            success: false, 
+            error: error instanceof Error ? error.message : 'Unknown error' 
+        };
+    }
+}
+
+// Connect to Qdrant Cloud
+export async function connectToQdrantCloud(url: string, apiKey: string, collectionName: string = 'documents') {
+    try {
+        console.log('Connecting to Qdrant Cloud...');
+        
+        // Test the connection by creating a new client
+        const cloudClient = new QdrantClient({ url, apiKey });
+        await cloudClient.getCollections();
+        
+        // Update environment variables (this would need to be handled differently in production)
+        process.env.QDRANT_URL = url;
+        process.env.QDRANT_API_KEY = apiKey;
+        process.env.QDRANT_COLLECTION = collectionName;
+        
+        console.log(`Successfully connected to Qdrant Cloud at ${url}`);
+        
+        return {
+            success: true,
+            message: 'Successfully connected to Qdrant Cloud',
+            url: url,
+            collectionName: collectionName
+        };
+    } catch (error) {
+        console.error(`Failed to connect to Qdrant Cloud: ${error}`);
+        throw new Error(`Failed to connect to Qdrant Cloud: ${error}`);
+    }
 }
 
 

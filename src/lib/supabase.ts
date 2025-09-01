@@ -1,22 +1,53 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
+// Create a singleton Supabase client for the browser
+let supabaseClient: SupabaseClient | null = null;
+
 export function getSupabaseClient(): SupabaseClient | null {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
     const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
-    if (!url || !key) return null;
-    // RLS bypass for server logging if service role is provided
-    return createClient(url, key, {
-        auth: {
-            persistSession: false,
-            autoRefreshToken: false,
-        },
-        global: {
-            headers: {
-                // Ensure edge-friendly fetch is used automatically
+    
+    // Check if we have valid URL and key (not placeholder values)
+    if (!url || !key || url.includes('your_') || key.includes('your_')) {
+        console.log('Supabase not configured - using placeholder values');
+        return null;
+    }
+    
+    // Return cached client if available
+    if (supabaseClient) return supabaseClient;
+    
+    try {
+        // RLS bypass for server logging if service role is provided
+        supabaseClient = createClient(url, key, {
+            auth: {
+                persistSession: false,
+                autoRefreshToken: false,
             },
-        },
-    });
+            global: {
+                headers: {
+                    // Ensure edge-friendly fetch is used automatically
+                },
+            },
+        });
+        
+        return supabaseClient;
+    } catch (error) {
+        console.error('Failed to create Supabase client:', error);
+        return null;
+    }
 }
+
+// Export a function that always returns a valid client or throws an error
+export function getSupabase(): SupabaseClient {
+    const client = getSupabaseClient();
+    if (!client) {
+        throw new Error('Supabase client not initialized. Please check your environment variables.');
+    }
+    return client;
+}
+
+// Export the client for direct use (legacy support)
+export const supabase = getSupabaseClient();
 
 export interface ChatLogRow {
     id?: string;
