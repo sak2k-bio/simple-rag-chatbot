@@ -9,13 +9,14 @@ A sophisticated Next.js chatbot application powered by Google's Gemini AI with f
 💬 **Streaming Chat**: Real-time streaming chat interface with instant responses
 🧠 **Memory Persistence**: Conversation history stored in Supabase with session management
 🎯 **Smart RAG Controls**: Interactive UI for Top-K, similarity threshold, and system prompt
-⚖️ **Cosine Distance Optimization**: Properly configured for medical/document similarity scoring
-📊 **Query Analysis**: Real-time analysis of query complexity and optimal parameters
-🎭 **System Prompt Toggle**: Switch between personality modes and direct responses
+⚖️ **Intuitive Similarity Controls**: User-friendly preset buttons (Precise, Balanced, Flexible) with custom slider
+📊 **Comprehensive Source Visibility**: See ALL retrieved sources with clear indicators of which were used
+🎭 **Customizable System Prompts**: Full control over AI personality and behavior
 📝 **Multi-Session Management**: Switch between different conversation threads
 🎨 **Modern UI**: Responsive design with Tailwind CSS and intuitive controls
 🔗 **Cloud Integration**: Seamless integration with Qdrant Cloud for scalable vector storage
 📈 **Performance Monitoring**: Built-in debugging and similarity score analysis
+🔍 **Source Usage Tracking**: Visual feedback showing used vs. unused sources with similarity scores
 
 ## 🚀 Quick Start
 
@@ -116,38 +117,58 @@ CREATE INDEX idx_chat_logs_model ON chat_logs(model);
 
 ## 🎛️ RAG Controls
 
-The chatbot features an interactive RAG control panel:
+The chatbot features an interactive RAG control panel with intuitive controls:
 
 ### Top-K Results
 - **Range**: 1-20 documents
 - **Default**: 10
 - **Purpose**: Controls how many relevant documents to retrieve
+- **💡 Tip**: Higher values (10-20) provide more context, lower values (1-5) focus on relevance
 
-### Similarity Threshold
-- **Range**: 0.05-0.30 (optimized for Cosine distance)
-- **Default**: 0.15
-- **Purpose**: Filters documents by relevance score
-- **💡 Note**: Lower scores = Better similarity (Cosine distance)
+### Similarity Threshold (Relevance Filter)
+- **Range**: 0.1-0.6 (expanded for better usability)
+- **Default**: 0.3 (Balanced)
+- **Preset Options**:
+  - 🔍 **Precise (0.15)**: Very strict matching, only most relevant documents
+  - ⚖️ **Balanced (0.3)**: Good mix of relevance and context (recommended)
+  - 🌐 **Flexible (0.5)**: Broader context, may include less relevant info
+- **Custom Slider**: Fine-tune between 0.1-0.6 with 0.05 steps
+- **💡 Note**: Lower values = More precise matches, Higher values = More flexible
 
-### System Prompt Toggle
-- **On**: Uses detailed medical/system prompt
-- **Off**: Direct conversation mode
-- **Purpose**: Switch between guided and free-form responses
+### System Prompt Management
+- **Toggle**: Enable/disable system prompts
+- **Custom Prompts**: Write your own system instructions
+- **Auto-save**: Automatically saves custom prompts to localStorage
+- **Reset Options**: Restore default prompts or custom ones
+- **Purpose**: Control AI personality, tone, and response style
 
 ## 🔍 How RAG Works
 
 1. **Query Processing**: User message is converted to embedding vector
-2. **Vector Search**: Searches Qdrant collection for similar documents
-3. **Context Retrieval**: Retrieves top-K documents above similarity threshold
-4. **Response Generation**: Gemini uses retrieved context to generate informed response
-5. **Memory Storage**: Conversation is saved to Supabase for persistence
+2. **Vector Search**: Searches Qdrant collection for similar documents (without threshold)
+3. **Context Filtering**: Applies similarity threshold to determine which sources to use
+4. **Response Generation**: Gemini uses filtered context to generate informed response
+5. **Source Display**: Shows ALL retrieved sources with usage indicators
+6. **Memory Storage**: Conversation is saved to Supabase for persistence
+
+### Enhanced Source Visibility
+
+The chatbot now provides complete transparency into the RAG process:
+- **All Sources Shown**: See every document retrieved, not just those used
+- **Usage Indicators**: Green badges for sources used in the answer, gray for unused
+- **Similarity Scores**: View exact similarity scores for each source
+- **Summary Statistics**: Quick overview of total retrieved vs. used sources
+- **Threshold Impact**: Understand how your settings affect source selection
 
 ### Cosine Distance Optimization
 
 This chatbot is specifically optimized for **Cosine distance** similarity scoring:
 - **Lower scores = Better similarity** (opposite of Euclidean distance)
-- **Optimal range**: 0.05-0.30 for medical/document content
-- **Default threshold**: 0.15 (balanced quality/quantity)
+- **Expanded range**: 0.1-0.6 for better usability and flexibility
+- **Recommended thresholds**:
+  - **Precise**: 0.15-0.2 (very strict matching)
+  - **Balanced**: 0.3 (good quality/quantity balance) ⭐ **Recommended**
+  - **Flexible**: 0.4-0.6 (broader context inclusion)
 
 ## 🛠️ Troubleshooting
 
@@ -161,9 +182,10 @@ node setup-qdrant-cloud.js
 ```
 
 **Common Issues:**
-- **Threshold too high**: Lower similarity threshold to 0.15-0.20
+- **Threshold too high**: Try "Balanced" (0.3) or "Flexible" (0.5) preset
 - **Collection empty**: Add documents to your Qdrant collection
 - **Wrong collection name**: Verify `QDRANT_COLLECTION` environment variable
+- **Source visibility**: Check that sources are being retrieved (even if not used)
 
 ### No AI Responses
 - ✅ Check `GOOGLE_GENERATIVE_AI_API_KEY` is set
@@ -178,9 +200,10 @@ node setup-qdrant-cloud.js
 ## 📊 Performance Tips
 
 ### Optimal RAG Settings
-- **Medical queries**: Top-K: 10-15, Threshold: 0.15-0.20
-- **General queries**: Top-K: 5-10, Threshold: 0.10-0.15
-- **Broad searches**: Top-K: 15-20, Threshold: 0.05-0.10
+- **Medical queries**: Top-K: 10-15, Threshold: 0.3 (Balanced) or 0.15 (Precise)
+- **General queries**: Top-K: 5-10, Threshold: 0.3 (Balanced)
+- **Broad searches**: Top-K: 15-20, Threshold: 0.5 (Flexible)
+- **Quick Start**: Use "Balanced" preset (0.3) for most queries
 
 ### Collection Optimization
 - **Vector size**: 768 dimensions (text-embedding-004)
@@ -208,10 +231,12 @@ node setup-qdrant-cloud.js
 
 ## 🎯 Use Cases
 
-- **Medical Documentation**: RAG-powered medical Q&A
-- **Research Assistant**: Document-based research support
-- **Knowledge Base**: Company/internal documentation search
-- **Educational Tool**: Textbook/learning material assistance
+- **Medical Documentation**: RAG-powered medical Q&A with source transparency
+- **Research Assistant**: Document-based research support with comprehensive source tracking
+- **Knowledge Base**: Company/internal documentation search with usage analytics
+- **Educational Tool**: Textbook/learning material assistance with learning insights
+- **Quality Assurance**: Verify AI responses against source documents
+- **Research Validation**: Understand which sources influenced each answer
 
 ---
 
