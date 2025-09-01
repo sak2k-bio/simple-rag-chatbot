@@ -14,6 +14,7 @@ A sophisticated Next.js chatbot application powered by Google's Gemini AI with f
 🎭 **Customizable System Prompts**: Full control over AI personality and behavior
 📝 **Multi-Session Management**: Switch between different conversation threads
 🎨 **Modern UI**: Responsive design with Tailwind CSS and intuitive controls
+🌙 **Dark Mode**: Toggleable dark/light theme with system preference detection
 🔗 **Cloud Integration**: Seamless integration with Qdrant Cloud for scalable vector storage
 📈 **Performance Monitoring**: Built-in debugging and similarity score analysis
 🔍 **Source Usage Tracking**: Visual feedback showing used vs. unused sources with similarity scores
@@ -32,7 +33,8 @@ Create a `.env.local` file in the root directory:
 
 ```bash
 # Google AI API Key (Required)
-GOOGLE_GENERATIVE_AI_API_KEY=your_google_ai_api_key_here
+GOOGLE_API_KEY=your_google_ai_api_key_here
+# Alternative: GOOGLE_GENERATIVE_AI_API_KEY=your_google_ai_api_key_here
 
 # Qdrant Cloud Configuration (Required for RAG)
 QDRANT_URL=https://your-cluster.qdrant.io
@@ -42,7 +44,19 @@ QDRANT_COLLECTION=pulmo_fishman
 # Supabase Configuration (Optional - for memory persistence)
 NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
 SUPABASE_ANON_KEY=your_supabase_anon_key
+SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
+SUPABASE_CHAT_TABLE=chat_logs
 CHAT_MESSAGES_TABLE=chat_messages_chatbot
+
+# Optional: Rate limiting (if using Upstash Redis)
+# UPSTASH_REDIS_REST_URL=https://your-redis-instance.upstash.io
+# UPSTASH_REDIS_REST_TOKEN=your_redis_token_here
+
+# Optional: Error monitoring (if using Sentry)
+# NEXT_PUBLIC_SENTRY_DSN=https://your-sentry-dsn@sentry.io/project
+
+# Optional: CORS restrictions
+# ALLOWED_ORIGINS=https://yourdomain.com,https://www.yourdomain.com
 ```
 
 ### 3. Run the Development Server
@@ -115,6 +129,21 @@ CREATE INDEX idx_chat_logs_created_at ON chat_logs(created_at);
 CREATE INDEX idx_chat_logs_model ON chat_logs(model);
 ```
 
+## 🎨 UI Features
+
+### Dark Mode Support
+- **🌙 Theme Toggle**: Click the theme toggle button in the navigation bar to switch between light and dark modes
+- **🔄 Auto-Detection**: Automatically detects your system's preferred theme on first visit
+- **💾 Persistent Storage**: Your theme preference is saved in localStorage and restored on subsequent visits
+- **⚡ Smooth Transitions**: All UI elements transition smoothly between themes for a polished experience
+- **🎯 Comprehensive Coverage**: All components, including chat messages, controls, and navigation, support both themes
+
+### Enhanced Navigation
+- **🎯 Clean Borders**: Navigation bar features subtle borders for better visual definition
+- **📱 Responsive Design**: Navigation adapts seamlessly to different screen sizes
+- **🎨 Theme-Aware Styling**: Navigation colors and borders automatically adjust to the current theme
+- **⚡ Interactive Elements**: Hover effects and transitions provide clear user feedback
+
 ## 🎛️ RAG Controls
 
 The chatbot features an interactive RAG control panel with intuitive controls:
@@ -126,11 +155,15 @@ The chatbot features an interactive RAG control panel with intuitive controls:
 - **💡 Tip**: Higher values (10-20) provide more context, lower values (1-5) focus on relevance
 
 ### Similarity Threshold (Relevance Filter)
-- **Fixed Optimal Value**: 0.1 (automatically set for best performance)
-- **No Configuration Needed**: Threshold is optimized for your document collection
-- **Always Includes Relevant Sources**: Captures your score range (0.122-0.145)
-- **RAG Mode Guaranteed**: No more fallback to direct conversation when sources exist
-- **💡 Note**: The system automatically uses the optimal threshold - no user adjustment needed
+- **Range**: 0.01-0.10 (configurable for different use cases)
+- **Default**: 0.05 (balanced coverage)
+- **Purpose**: Controls how strict document matching is
+- **💡 Preset Options**:
+  - **Very Flexible** (0.01-0.03): More sources, broader context
+  - **Balanced** (0.05): Good quality/quantity balance ⭐ **Recommended**
+  - **Very Precise** (0.08-0.10): Fewer sources, more precise matching
+- **Auto-save**: Your threshold preference is saved to localStorage
+- **Visual Feedback**: Real-time descriptions show current setting impact
 
 ### System Prompt Management
 - **Toggle**: Enable/disable system prompts
@@ -161,11 +194,11 @@ The chatbot now provides complete transparency into the RAG process:
 
 This chatbot is specifically optimized for **Cosine distance** similarity scoring:
 - **Lower scores = Better similarity** (opposite of Euclidean distance)
-- **Expanded range**: 0.1-0.6 for better usability and flexibility
+- **Configurable range**: 0.01-0.10 for precise control and flexibility
 - **Recommended thresholds**:
-  - **Precise**: 0.15-0.2 (very strict matching)
-  - **Balanced**: 0.3 (good quality/quantity balance) ⭐ **Recommended**
-  - **Flexible**: 0.4-0.6 (broader context inclusion)
+  - **Very Precise**: 0.08-0.10 (very strict matching)
+  - **Balanced**: 0.05 (good quality/quantity balance) ⭐ **Recommended**
+  - **Very Flexible**: 0.01-0.03 (broader context inclusion)
 
 ## 🛠️ Troubleshooting
 
@@ -179,13 +212,13 @@ node setup-qdrant-cloud.js
 ```
 
 **Common Issues:**
-- **Threshold too high**: Try "Balanced" (0.3) or "Flexible" (0.5) preset
+- **Threshold too high**: Try "Balanced" (0.05) or "Very Flexible" (0.02) preset
 - **Collection empty**: Add documents to your Qdrant collection
 - **Wrong collection name**: Verify `QDRANT_COLLECTION` environment variable
 - **Source visibility**: Check that sources are being retrieved (even if not used)
 
 ### No AI Responses
-- ✅ Check `GOOGLE_GENERATIVE_AI_API_KEY` is set
+- ✅ Check `GOOGLE_API_KEY` or `GOOGLE_GENERATIVE_AI_API_KEY` is set
 - ✅ Verify API key has sufficient credits
 - ✅ Check browser console for errors
 
@@ -197,10 +230,10 @@ node setup-qdrant-cloud.js
 ## 📊 Performance Tips
 
 ### Optimal RAG Settings
-- **Medical queries**: Top-K: 10-15, Threshold: 0.3 (Balanced) or 0.15 (Precise)
-- **General queries**: Top-K: 5-10, Threshold: 0.3 (Balanced)
-- **Broad searches**: Top-K: 15-20, Threshold: 0.5 (Flexible)
-- **Quick Start**: Use "Balanced" preset (0.3) for most queries
+- **Medical queries**: Top-K: 10-15, Threshold: 0.05 (Balanced) or 0.08 (Precise)
+- **General queries**: Top-K: 5-10, Threshold: 0.05 (Balanced)
+- **Broad searches**: Top-K: 15-20, Threshold: 0.02 (Very Flexible)
+- **Quick Start**: Use "Balanced" preset (0.05) for most queries
 
 ### Collection Optimization
 - **Vector size**: 768 dimensions (text-embedding-004)
@@ -239,6 +272,13 @@ node setup-qdrant-cloud.js
 
 ## 🆕 What's New
 
+### Dark Mode & UI Enhancements
+- **🌙 Dark Mode Toggle**: Switch between light and dark themes with a single click
+- **🎨 System Preference Detection**: Automatically detects and applies your system's preferred theme
+- **💾 Theme Persistence**: Your theme preference is saved and restored across sessions
+- **🎯 Enhanced Navigation**: Improved nav bar with clean borders and better visual hierarchy
+- **⚡ Smooth Transitions**: Seamless theme switching with smooth color transitions
+
 ### Enhanced Source Visibility
 - **Complete Transparency**: See all retrieved sources, not just those used
 - **Usage Indicators**: Visual feedback showing which sources influenced the answer
@@ -246,10 +286,10 @@ node setup-qdrant-cloud.js
 - **Summary Statistics**: Quick overview of source utilization
 
 ### Improved RAG Controls
-- **Preset Buttons**: One-click access to Precise, Balanced, and Flexible modes
-- **Expanded Range**: Similarity threshold now 0.1-0.6 for better usability
-- **Visual Feedback**: Real-time descriptions of current settings
-- **Quick Reset**: Easy return to recommended settings
+- **Preset Buttons**: One-click access to Very Precise, Balanced, and Very Flexible modes
+- **Precise Range**: Similarity threshold now 0.01-0.10 for fine-tuned control
+- **Visual Feedback**: Real-time descriptions of current settings and their impact
+- **Quick Reset**: Easy return to recommended settings with auto-save functionality
 
 ### Customizable System Prompts
 - **Full Control**: Write your own system instructions
