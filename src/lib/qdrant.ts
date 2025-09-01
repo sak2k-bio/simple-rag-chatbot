@@ -1,4 +1,6 @@
 import { QdrantClient } from '@qdrant/js-client-rest';
+import { embed } from 'ai';
+import { google } from '@ai-sdk/google';
 
 export function getQdrantClient() {
     const url = process.env.QDRANT_URL;
@@ -43,6 +45,11 @@ export async function searchQdrant(
         limit: opts?.limit ?? 5,
         with_payload: opts?.withPayload ?? true,
         with_vectors: opts?.withVectors ?? false,
+        // Use cosine similarity for better semantic matching
+        params: {
+            hnsw_ef: 128, // Higher ef for better search quality
+            exact: false
+        }
     };
 
     // Add score threshold if specified
@@ -208,6 +215,93 @@ export async function connectToQdrantCloud(url: string, apiKey: string, collecti
         console.error(`Failed to connect to Qdrant Cloud: ${error}`);
         throw new Error(`Failed to connect to Qdrant Cloud: ${error}`);
     }
+}
+
+// Analyze similarity score distribution for threshold optimization
+export async function analyzeSimilarityScores(
+    query: string,
+    opts?: { 
+        collection?: string; 
+        limit?: number;
+    }
+): Promise<{
+    scores: number[];
+    statistics: {
+        min: number;
+        max: number;
+        mean: number;
+        median: number;
+        recommendedThreshold: number;
+    };
+    sampleResults: QdrantSearchHit[];
+}> {
+    const client = getQdrantClient();
+    const collection = opts?.collection || process.env.QDRANT_COLLECTION;
+    if (!collection) throw new Error('QDRANT_COLLECTION is not set');
+
+    // Create embedding for the query
+    const embeddingModel = google.embedding('text-embedding-004');
+    const embeddingRes = await embed({
+        model: embeddingModel,
+        value: query,
+    });
+    const vector = embeddingRes.embedding;
+
+    // Search without threshold to get all scores
+    const searchParams = {
+        vector,
+        limit: opts?.limit ?? 20,
+        with_payload: true,
+        with_vectors: false,
+        params: {
+            hnsw_ef: 128,
+            exact: false
+        }
+    };
+
+    const res = await client.search(collection, searchParams) as unknown;
+    
+    // Normalize response
+    type SearchPoint = { score: number; payload: QdrantPointPayload };
+    type SearchEnvelope = { result?: SearchPoint[] };
+    const points: SearchPoint[] = Array.isArray(res)
+        ? (res as SearchPoint[])
+        : (((res as SearchEnvelope)?.result as SearchPoint[] | undefined) ?? []);
+
+    const scores = points.map(p => p.score).sort((a, b) => b - a);
+    
+    // Calculate statistics
+    const min = Math.min(...scores);
+    const max = Math.max(...scores);
+    const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
+    const median = scores[Math.floor(scores.length / 2)];
+    
+    // Recommend threshold based on score distribution
+    // For cosine similarity, scores typically range from -1 to 1
+    // For dot product, scores can vary widely
+    let recommendedThreshold: number;
+    if (max <= 1 && min >= -1) {
+        // Likely cosine similarity
+        recommendedThreshold = Math.max(0.1, mean * 0.8); // Conservative threshold
+    } else {
+        // Likely dot product or other metric
+        recommendedThreshold = Math.max(0.1, mean * 0.6); // More conservative for dot product
+    }
+
+    return {
+        scores,
+        statistics: {
+            min,
+            max,
+            mean,
+            median,
+            recommendedThreshold
+        },
+        sampleResults: points.map((p) => ({
+            score: p.score,
+            payload: p.payload,
+        }))
+    };
 }
 
 

@@ -34,12 +34,14 @@ export default function ChatUI() {
     const [conversationContext, setConversationContext] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
 
     // RAG control state
-    const [topK, setTopK] = useState<number>(10);
-    const [similarityThreshold, setSimilarityThreshold] = useState<number>(0.3);
+    const [topK, setTopK] = useState<number>(15); // Increased for better coverage
+    const [similarityThreshold, setSimilarityThreshold] = useState<number>(0.05); // Configurable threshold for broader recall
     const [useSystemPrompt, setUseSystemPrompt] = useState<boolean>(true);
     const [customSystemPrompt, setCustomSystemPrompt] = useState<string>('You are a helpful AI assistant. Answer questions based on the provided context and be concise.');
     const [showSystemPromptInput, setShowSystemPromptInput] = useState<boolean>(false);
     const [showRagControls, setShowRagControls] = useState<boolean>(true);
+    const [showUnusedSources, setShowUnusedSources] = useState<boolean>(false);
+    const [showUsedSources, setShowUsedSources] = useState<boolean>(false);
 
     useEffect(() => {
         setIsClient(true);
@@ -49,6 +51,12 @@ export default function ChatUI() {
         const savedPrompt = localStorage.getItem('custom_system_prompt');
         if (savedPrompt) {
             setCustomSystemPrompt(savedPrompt);
+        }
+        
+        // Load saved similarity threshold from localStorage
+        const savedThreshold = localStorage.getItem('similarity_threshold');
+        if (savedThreshold) {
+            setSimilarityThreshold(Number(savedThreshold));
         }
     }, []);
 
@@ -283,33 +291,39 @@ export default function ChatUI() {
             let parsedSources: Source[] = [];
             let cleanContent = assistantMessage;
             
-            // Check if the response contains sources section
-            const sourcesMatch = assistantMessage.match(/---\s*\*\*Sources Used:\*\*\s*\n([\s\S]*?)(?=\n\n|$)/);
+            console.log('🔍 Parsing response for sources:', assistantMessage.substring(0, 200) + '...');
+            console.log('🔍 Full response length:', assistantMessage.length);
+            
+            // Look for sources metadata JSON at the end of the response
+            const sourcesMatch = assistantMessage.match(/---\s*\n(\{.*"type":"sources_metadata".*\})$/);
             if (sourcesMatch) {
-                const sourcesText = sourcesMatch[1];
-                cleanContent = assistantMessage.replace(sourcesMatch[0], '').trim();
-                
-                // Parse each source line
-                const sourceLines = sourcesText.split('\n').filter(line => line.trim());
-                parsedSources = sourceLines.map((line, index) => {
-                    const match = line.match(/^\d+\.\s*(.+?)\s*\(similarity:\s*([\d.]+)\)/);
-                    if (match) {
-                        return {
+                try {
+                    const sourcesData = JSON.parse(sourcesMatch[1]);
+                    console.log('✅ Found sources metadata:', sourcesData);
+                    
+                    if (sourcesData.type === 'sources_metadata' && sourcesData.sources) {
+                        parsedSources = sourcesData.sources.map((s: any) => ({
                             pageContent: '',
                             metadata: {
-                                source: match[1].trim(),
-                                score: parseFloat(match[2])
+                                source: s.source,
+                                score: s.score,
+                                used: s.used
                             }
-                        };
+                        }));
+                        
+                        // Remove the metadata from the content
+                        cleanContent = assistantMessage.replace(sourcesMatch[0], '').trim();
+                        
+                        console.log('✅ Parsed sources:', parsedSources.length);
+                        console.log('🔍 All parsed sources metadata:', parsedSources.map(s => ({ source: s.metadata.source, score: s.metadata.score, used: s.metadata.used })));
                     }
-                    return {
-                        pageContent: '',
-                        metadata: {
-                            source: line.trim(),
-                            score: 0
-                        }
-                    };
-                });
+                } catch (parseError) {
+                    console.error('❌ Error parsing sources metadata:', parseError);
+                    cleanContent = assistantMessage;
+                }
+            } else {
+                console.log('❌ No sources metadata found in response');
+                cleanContent = assistantMessage;
             }
 
             // Create final assistant message object
@@ -456,7 +470,7 @@ export default function ChatUI() {
             {/* Chat Header with Session Management */}
             <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-white/80 backdrop-blur-sm">
                 <div className="flex items-center gap-4">
-                    <h1 className="text-lg font-semibold tracking-tight text-orange-700">Advance Pulmo RAGbot</h1>
+                    <h1 className="text-lg font-semibold tracking-tight text-orange-700">Pulmo RAGbot</h1>
                     <div className="text-sm text-gray-500">
                         Session: {sessionId.substring(0, 8)}... | Context: {conversationContext.length} messages
                     </div>
@@ -497,7 +511,7 @@ export default function ChatUI() {
                                  {/* Quick Tips */}
                  <div className="mb-3 p-2 bg-yellow-50 border border-yellow-200 rounded">
                      <p className="text-xs text-yellow-800">
-                         <strong>💡 Quick Tips:</strong> Start with "Balanced" (0.3) for most queries. Use "Precise" (0.15) for specific technical questions. Use "Flexible" (0.5) when you want broader context.
+                         <strong>💡 Quick Tips:</strong> Start with "Balanced" (0.05) for most queries. Use "Very Precise" (0.08-0.10) for specific technical questions. Use "Very Flexible" (0.01-0.03) when you want broader context. If no sources are found, try lowering the threshold.
                      </p>
                      <p className="text-xs text-yellow-700 mt-1">
                          <strong>🔍 Source Visibility:</strong> You'll see ALL retrieved sources below each answer - green ones were used, gray ones were below your threshold.
@@ -533,90 +547,108 @@ export default function ChatUI() {
                             </div>
                         </div>
 
-                        {/* Similarity Threshold Control */}
+                        {/* Similarity Threshold Control - Configurable */}
                         <div className="space-y-2">
                             <label className="text-xs font-medium text-gray-700">
                                 Relevance Filter: {similarityThreshold.toFixed(2)}
+                                <span className="ml-1 text-gray-500">
+                                    ({similarityThreshold <= 0.03 ? 'More sources, broader context' :
+                                      similarityThreshold <= 0.06 ? 'Balanced coverage' :
+                                      'Fewer sources, more precise'})
+                                </span>
                             </label>
-                            <div className="mb-2 p-2 bg-green-50 rounded border border-green-200">
-                                <p className="text-xs text-green-800">
-                                    <strong>💡 Relevance Filter:</strong> Controls how strict the document matching is. Lower values (0.1-0.2) give very precise matches, while higher values (0.4-0.6) are more flexible and include broader context.
+                            <div className="mb-2 p-2 bg-blue-50 rounded border border-blue-200">
+                                <p className="text-xs text-blue-800">
+                                    <strong>💡 Relevance Filter:</strong> Controls how strict the document matching is. Lower values (0.01-0.03) = More flexible, Higher values (0.08-0.10) = More precise. Current setting: {similarityThreshold.toFixed(2)}.
                                 </p>
                             </div>
+                            <input
+                                type="range"
+                                min="0.01"
+                                max="0.10"
+                                step="0.01"
+                                value={similarityThreshold}
+                                onChange={(e) => {
+                                    const newThreshold = Number(e.target.value);
+                                    setSimilarityThreshold(newThreshold);
+                                    // Save to localStorage
+                                    localStorage.setItem('similarity_threshold', newThreshold.toString());
+                                }}
+                                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer slider"
+                            />
+                            <div className="flex justify-between text-xs text-gray-500">
+                                <span>0.01</span>
+                                <span>0.03</span>
+                                <span>0.05</span>
+                                <span>0.07</span>
+                                <span>0.10</span>
+                            </div>
+                            <div className="text-xs text-gray-600 text-center mb-2">
+                                <span className={`px-2 py-1 rounded ${
+                                    similarityThreshold <= 0.03 ? 'bg-green-100 text-green-700' :
+                                    similarityThreshold <= 0.06 ? 'bg-yellow-100 text-yellow-700' :
+                                    'bg-red-100 text-red-700'
+                                }`}>
+                                    {similarityThreshold <= 0.03 ? 'Very Flexible' :
+                                     similarityThreshold <= 0.06 ? 'Balanced' : 'Very Precise'}
+                                </span>
+                            </div>
                             
-                            {/* Preset Buttons */}
-                            <div className="flex gap-1 mb-2">
+                            {/* Quick Preset Buttons */}
+                            <div className="flex gap-2 justify-center mb-2">
                                 <button
-                                    onClick={() => setSimilarityThreshold(0.15)}
-                                    className={`px-2 py-1 text-xs rounded transition-colors ${
-                                        similarityThreshold === 0.15 
-                                            ? 'bg-green-600 text-white' 
-                                            : 'bg-green-100 hover:bg-green-200 text-green-700'
+                                    onClick={() => {
+                                        setSimilarityThreshold(0.01);
+                                        localStorage.setItem('similarity_threshold', '0.01');
+                                    }}
+                                    className={`px-2 py-1 text-xs rounded border transition-colors ${
+                                        similarityThreshold === 0.01 
+                                            ? 'bg-green-500 text-white border-green-500' 
+                                            : 'bg-green-50 text-green-700 border-green-200 hover:bg-green-100'
                                     }`}
                                 >
-                                    Precise
+                                    Very Flexible
                                 </button>
                                 <button
-                                    onClick={() => setSimilarityThreshold(0.3)}
-                                    className={`px-2 py-1 text-xs rounded transition-colors ${
-                                        similarityThreshold === 0.3 
-                                            ? 'bg-blue-600 text-white' 
-                                            : 'bg-blue-100 hover:bg-blue-200 text-blue-700'
+                                    onClick={() => {
+                                        setSimilarityThreshold(0.05);
+                                        localStorage.setItem('similarity_threshold', '0.05');
+                                    }}
+                                    className={`px-2 py-1 text-xs rounded border transition-colors ${
+                                        similarityThreshold === 0.05 
+                                            ? 'bg-green-500 text-white border-green-500' 
+                                            : 'bg-yellow-50 text-yellow-700 border-yellow-200 hover:bg-yellow-100'
                                     }`}
                                 >
                                     Balanced
                                 </button>
                                 <button
-                                    onClick={() => setSimilarityThreshold(0.5)}
-                                    className={`px-2 py-1 text-xs rounded transition-colors ${
-                                        similarityThreshold === 0.5 
-                                            ? 'bg-orange-600 text-white' 
-                                            : 'bg-orange-100 hover:bg-orange-200 text-orange-700'
+                                    onClick={() => {
+                                        setSimilarityThreshold(0.10);
+                                        localStorage.setItem('similarity_threshold', '0.10');
+                                    }}
+                                    className={`px-2 py-1 text-xs rounded border transition-colors ${
+                                        similarityThreshold === 0.10 
+                                            ? 'bg-red-500 text-white border-red-500' 
+                                            : 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'
                                     }`}
                                 >
-                                    Flexible
+                                    Very Precise
                                 </button>
                             </div>
                             
-                            {/* Custom Slider */}
-                            <input
-                                type="range"
-                                min="0.1"
-                                max="0.6"
-                                step="0.05"
-                                value={similarityThreshold}
-                                onChange={(e) => setSimilarityThreshold(Number(e.target.value))}
-                                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer slider"
-                            />
-                            <div className="flex justify-between text-xs text-gray-500">
-                                <span>0.1</span>
-                                <span>0.2</span>
-                                <span>0.3</span>
-                                <span>0.4</span>
-                                <span>0.5</span>
-                                <span>0.6</span>
-                            </div>
-                            
-                            {/* Current Setting Description */}
-                            <div className="text-xs text-center p-2 bg-gray-50 rounded">
-                                {similarityThreshold <= 0.2 && (
-                                    <span className="text-green-600">🔍 Very Precise - Only the most relevant documents</span>
-                                )}
-                                {similarityThreshold > 0.2 && similarityThreshold <= 0.35 && (
-                                    <span className="text-blue-600">⚖️ Balanced - Good mix of relevance and context</span>
-                                )}
-                                {similarityThreshold > 0.35 && (
-                                    <span className="text-orange-600">🌐 Flexible - Broader context, may include less relevant info</span>
-                                )}
-                            </div>
-                            
                             {/* Reset Button */}
-                            <button
-                                onClick={() => setSimilarityThreshold(0.3)}
-                                className="w-full px-2 py-1 text-xs bg-blue-100 hover:bg-blue-200 text-blue-700 border border-blue-300 rounded transition-colors"
-                            >
-                                🔄 Reset to Recommended (0.3)
-                            </button>
+                            <div className="text-center">
+                                <button
+                                    onClick={() => {
+                                        setSimilarityThreshold(0.05);
+                                        localStorage.setItem('similarity_threshold', '0.05');
+                                    }}
+                                    className="px-3 py-1 text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300 rounded transition-colors"
+                                >
+                                    Reset to Default (0.05)
+                                </button>
+                            </div>
                         </div>
 
                         {/* System Prompt Toggle */}
@@ -777,43 +809,114 @@ export default function ChatUI() {
                                              );
                                          })()}
                                          
-                                         <div className="text-xs text-gray-500 mb-2">All Retrieved Sources ({m.sources.length}):</div>
-                                         <div className="space-y-1">
-                                             {m.sources.slice(0, 10).map((source: Source, index: number) => (
-                                                 <div key={index} className={`text-xs rounded px-2 py-1 flex justify-between items-center ${
-                                                     source.metadata?.used 
-                                                         ? 'bg-green-100 text-green-800 border border-green-200' 
-                                                         : 'bg-gray-100 text-gray-600 border border-gray-200'
-                                                 }`}>
-                                                     <div className="flex items-center gap-2 flex-1 min-w-0">
-                                                         <span className={`text-xs px-1 py-0.5 rounded ${
-                                                             source.metadata?.used 
-                                                                 ? 'bg-green-200 text-green-700' 
-                                                                 : 'bg-gray-200 text-gray-500'
-                                                         }`}>
-                                                             {source.metadata?.used ? '✓ Used' : '○ Unused'}
-                                                         </span>
-                                                         <span className="truncate">
-                                                             {source.metadata?.source || `Source ${index + 1}`}
-                                                         </span>
+                                         {/* Used Sources Section */}
+                                         <div className="mb-4">
+                                             <div className="flex items-center justify-between mb-2">
+                                                 <div className="text-xs text-gray-700 font-medium flex items-center gap-2">
+                                                     <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                                                     Sources Used in Answer ({m.sources.filter(s => s.metadata?.used).length})
+                                                 </div>
+                                                 <button
+                                                     onClick={() => setShowUsedSources(!showUsedSources)}
+                                                     className="text-xs text-green-600 hover:text-green-700 px-2 py-1 rounded border border-green-200 hover:border-green-300 transition-colors"
+                                                 >
+                                                     {showUsedSources ? 'Show Less' : 'Show All'}
+                                                 </button>
+                                             </div>
+                                             <div className="space-y-1">
+                                                 {m.sources.filter(s => s.metadata?.used).slice(0, showUsedSources ? undefined : 5).map((source: Source, index: number) => (
+                                                     <div key={`used-${index}`} className="text-xs rounded px-3 py-2 bg-green-50 border border-green-200 flex justify-between items-center">
+                                                         <div className="flex items-center gap-2 flex-1 min-w-0">
+                                                             <span className="text-xs px-2 py-1 rounded bg-green-200 text-green-700 font-medium">
+                                                                 ✓ Used
+                                                             </span>
+                                                             <span className="truncate text-green-800">
+                                                                 {source.metadata?.source || `Source ${index + 1}`}
+                                                             </span>
+                                                         </div>
+                                                         {typeof source.metadata?.score === 'number' && (
+                                                             <span className="text-xs ml-2 text-green-600 font-medium">
+                                                                 {source.metadata.score.toFixed(3)}
+                                                             </span>
+                                                         )}
                                                      </div>
-                                                     {typeof source.metadata?.score === 'number' && (
-                                                         <span className={`text-xs ml-2 ${
-                                                             source.metadata?.used ? 'text-green-600' : 'text-gray-400'
-                                                         }`}>
-                                                             {source.metadata.score.toFixed(3)}
-                                                         </span>
-                                                     )}
-                                                 </div>
-                                             ))}
-                                             {m.sources.length > 10 && (
-                                                 <div className="text-xs text-gray-400 text-center">
-                                                     +{m.sources.length - 10} more sources
-                                                 </div>
-                                             )}
+                                                 ))}
+                                                 {!showUsedSources && m.sources.filter(s => s.metadata?.used).length > 5 && (
+                                                     <div className="text-xs text-green-600 text-center py-1">
+                                                         +{m.sources.filter(s => s.metadata?.used).length - 5} more used sources
+                                                     </div>
+                                                 )}
+                                             </div>
                                          </div>
-                                         <div className="mt-2 text-xs text-gray-500 text-center">
-                                             💡 Green sources were used in the answer, gray sources were below your threshold
+
+                                         {/* Unused Sources Section */}
+                                         {m.sources.filter(s => !s.metadata?.used).length > 0 && (
+                                             <div className="mb-4">
+                                                 <div className="flex items-center justify-between mb-2">
+                                                     <div className="text-xs text-gray-700 font-medium flex items-center gap-2">
+                                                         <span className="w-2 h-2 bg-gray-400 rounded-full"></span>
+                                                         Sources Below Threshold ({m.sources.filter(s => !s.metadata?.used).length})
+                                                     </div>
+                                                     <button
+                                                         onClick={() => setShowUnusedSources(!showUnusedSources)}
+                                                         className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded border border-gray-200 hover:border-gray-300 transition-colors"
+                                                     >
+                                                         {showUnusedSources ? 'Hide Details' : 'Show Details'}
+                                                     </button>
+                                                 </div>
+                                                 
+                                                 {showUnusedSources && (
+                                                     <>
+                                                         <div className="space-y-1 max-h-32 overflow-y-auto">
+                                                             {m.sources.filter(s => !s.metadata?.used).slice(0, showUnusedSources ? 12 : 6).map((source: Source, index: number) => (
+                                                                 <div key={`unused-${index}`} className="text-xs rounded px-3 py-2 bg-gray-50 border border-gray-200 flex justify-between items-center">
+                                                                     <div className="flex items-center gap-2 flex-1 min-w-0">
+                                                                         <span className="text-xs px-2 py-1 rounded bg-gray-200 text-gray-600 font-medium">
+                                                                             ○ Below Threshold
+                                                                         </span>
+                                                                         <span className="truncate text-gray-600">
+                                                                             {source.metadata?.source || `Source ${index + 1}`}
+                                                                         </span>
+                                                                     </div>
+                                                                     {typeof source.metadata?.score === 'number' && (
+                                                                         <span className="text-xs ml-2 text-gray-500 font-medium">
+                                                                             {source.metadata.score.toFixed(3)}
+                                                                         </span>
+                                                                     )}
+                                                                 </div>
+                                                             ))}
+                                                             {!showUnusedSources && m.sources.filter(s => !s.metadata?.used).length > 6 && (
+                                                                 <div className="text-xs text-gray-500 text-center py-1">
+                                                                     +{m.sources.filter(s => !s.metadata?.used).length - 6} more below threshold
+                                                                 </div>
+                                                             )}
+                                                             {showUnusedSources && m.sources.filter(s => !s.metadata?.used).length > 12 && (
+                                                                 <div className="text-xs text-gray-500 text-center py-1">
+                                                                     +{m.sources.filter(s => !s.metadata?.used).length - 12} more below threshold
+                                                                 </div>
+                                                             )}
+                                                         </div>
+                                                         <div className="text-xs text-gray-500 text-center mt-2">
+                                                             💡 These sources were retrieved but didn't meet your relevance threshold of {similarityThreshold.toFixed(2)}
+                                                         </div>
+                                                     </>
+                                                 )}
+                                             </div>
+                                         )}
+
+                                         {/* Legend */}
+                                         <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded">
+                                             <div className="text-xs text-blue-800 font-medium mb-1">Legend:</div>
+                                             <div className="flex flex-wrap gap-4 text-xs text-blue-700">
+                                                 <span className="flex items-center gap-1">
+                                                     <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                                                     Green: Used in answer
+                                                 </span>
+                                                 <span className="flex items-center gap-1">
+                                                     <span className="w-2 h-2 bg-gray-400 rounded-full"></span>
+                                                     Gray: Below threshold
+                                                 </span>
+                                             </div>
                                          </div>
                                      </div>
                                  )}

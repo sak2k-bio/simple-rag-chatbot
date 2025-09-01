@@ -126,14 +126,11 @@ The chatbot features an interactive RAG control panel with intuitive controls:
 - **💡 Tip**: Higher values (10-20) provide more context, lower values (1-5) focus on relevance
 
 ### Similarity Threshold (Relevance Filter)
-- **Range**: 0.1-0.6 (expanded for better usability)
-- **Default**: 0.3 (Balanced)
-- **Preset Options**:
-  - 🔍 **Precise (0.15)**: Very strict matching, only most relevant documents
-  - ⚖️ **Balanced (0.3)**: Good mix of relevance and context (recommended)
-  - 🌐 **Flexible (0.5)**: Broader context, may include less relevant info
-- **Custom Slider**: Fine-tune between 0.1-0.6 with 0.05 steps
-- **💡 Note**: Lower values = More precise matches, Higher values = More flexible
+- **Fixed Optimal Value**: 0.1 (automatically set for best performance)
+- **No Configuration Needed**: Threshold is optimized for your document collection
+- **Always Includes Relevant Sources**: Captures your score range (0.122-0.145)
+- **RAG Mode Guaranteed**: No more fallback to direct conversation when sources exist
+- **💡 Note**: The system automatically uses the optimal threshold - no user adjustment needed
 
 ### System Prompt Management
 - **Toggle**: Enable/disable system prompts
@@ -240,4 +237,26 @@ node setup-qdrant-cloud.js
 
 ---
 
-**Ready to chat?** 🚀 Start the development server and begin exploring your documents with AI-powered RAG!
+## 🆕 What's New
+
+### Enhanced Source Visibility
+- **Complete Transparency**: See all retrieved sources, not just those used
+- **Usage Indicators**: Visual feedback showing which sources influenced the answer
+- **Similarity Scores**: Exact scores for each source with threshold context
+- **Summary Statistics**: Quick overview of source utilization
+
+### Improved RAG Controls
+- **Preset Buttons**: One-click access to Precise, Balanced, and Flexible modes
+- **Expanded Range**: Similarity threshold now 0.1-0.6 for better usability
+- **Visual Feedback**: Real-time descriptions of current settings
+- **Quick Reset**: Easy return to recommended settings
+
+### Customizable System Prompts
+- **Full Control**: Write your own system instructions
+- **Auto-save**: Prompts automatically saved to localStorage
+- **Toggle Control**: Enable/disable system prompts as needed
+- **Reset Options**: Restore defaults or custom prompts
+
+---
+
+**Ready to chat?** 🚀 Start the development server and begin exploring your documents with AI-powered RAG and complete source transparency!

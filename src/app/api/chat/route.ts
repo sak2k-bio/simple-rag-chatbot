@@ -71,8 +71,8 @@ export async function POST(req: NextRequest) {
                 const vector = embeddingRes.embedding;
 
                 // Determine Top-K value
-                const finalTopK = topK || 5;
-                const finalThreshold = similarityThreshold || 0.7;
+                const finalTopK = topK || 15; // Increased default for better coverage
+                const finalThreshold = similarityThreshold || 0.05; // More permissive threshold for broader recall
                 
                 console.log(`Using Top-K: ${finalTopK}, Threshold: ${finalThreshold}`);
 
@@ -80,7 +80,7 @@ export async function POST(req: NextRequest) {
                 // First, search without threshold to get all sources for display
                 const allHits = await searchQdrant(vector, {
                     collection: process.env.QDRANT_COLLECTION,
-                    limit: finalTopK,
+                    limit: finalTopK * 2, // Get more results initially for better filtering
                     // No score threshold here - we want to see all retrieved sources
                 });
                 
@@ -96,11 +96,14 @@ export async function POST(req: NextRequest) {
                     
                     console.log('Original source name:', sourceName);
                     
+                    // Debug: Log the actual payload structure
+                    console.log('🔍 Payload structure:', JSON.stringify(h.payload, null, 2).substring(0, 500));
+                    
                     // Remove common prefixes from source names for cleaner display
                     const prefixesToRemove = [
                         'C:\\Users\\User\\Desktop\\github projects\\pulmo-superbot\\assets\\split 11\\',
-                        'C:/Users/User/Desktop/github projects/pulmo-superbot/assets/split 11/',
-                        '/Users/User/Desktop/github projects/pulmo-superbot/assets/split 11/',
+                        'C:/Users/User/Desktop/github projects\\pulmo-superbot/assets/split 11/',
+                        '/Users/User/Desktop/github projects\\pulmo-superbot/assets/split 11/',
                         'C:\\\\Users\\\\User\\\\Desktop\\\\github projects\\\\pulmo-superbot\\\\assets\\\\split 11\\\\'
                     ];
                     
@@ -112,8 +115,29 @@ export async function POST(req: NextRequest) {
                         }
                     }
                     
+                    // Extract text content - prioritize actual text fields over JSON fallback
+                    let textContent = '';
+                    if (h.payload?.text && typeof h.payload.text === 'string') {
+                        textContent = h.payload.text;
+                    } else if (h.payload?.content && typeof h.payload.content === 'string') {
+                        textContent = h.payload.content;
+                    } else if (h.payload?.pageContent && typeof h.payload.pageContent === 'string') {
+                        textContent = h.payload.pageContent;
+                    } else {
+                        // Fallback: try to extract meaningful text from payload
+                        const payloadStr = JSON.stringify(h.payload);
+                        // Only use JSON fallback if it's not too long and contains readable text
+                        if (payloadStr.length < 1000 && payloadStr.includes(' ')) {
+                            textContent = payloadStr;
+                        } else {
+                            textContent = 'Content not available in readable format';
+                        }
+                    }
+                    
+                    console.log('🔍 Extracted text content (first 200 chars):', textContent.substring(0, 200));
+                    
                     return {
-                        pageContent: h.payload?.text || h.payload?.content || JSON.stringify(h.payload),
+                        pageContent: textContent,
                         metadata: {
                             source: sourceName,
                             score: h.score,
@@ -129,6 +153,21 @@ export async function POST(req: NextRequest) {
                 context = contextSources
                     .map((s) => s.pageContent)
                     .join('\n---\n');
+                
+                // Add production guardrail for thin context
+                if (context.length < 200) {
+                    context = context + '\n---\n[Note: Retrieved context has limited direct coverage; answer with general medical knowledge.]';
+                }
+                
+                // Add final safety net - ensure context always has guidance
+                if (!context.includes('general medical knowledge') && !context.includes('comprehensive medical response')) {
+                    context = context + '\n---\n[IMPORTANT: Always provide a comprehensive medical answer, even if the specific term is not directly mentioned in the retrieved context. Use general medical knowledge when needed.]';
+                }
+                
+                // Debug: Log what's being sent to the AI
+                console.log('🔍 Context being sent to AI (first 500 chars):', context.substring(0, 500));
+                console.log('🔍 Context length:', context.length);
+                console.log('🔍 Number of context sources:', contextSources.length);
                 
                 // Create all sources list for display (including unused ones)
                 sources = allHits.map((h) => {
@@ -149,8 +188,27 @@ export async function POST(req: NextRequest) {
                         }
                     }
                     
+                    // Extract text content for display - same logic as context extraction
+                    let pageContent = '';
+                    if (h.payload?.text && typeof h.payload.text === 'string') {
+                        pageContent = h.payload.text;
+                    } else if (h.payload?.content && typeof h.payload.content === 'string') {
+                        pageContent = h.payload.content;
+                    } else if (h.payload?.pageContent && typeof h.payload.pageContent === 'string') {
+                        pageContent = h.payload.pageContent;
+                    } else {
+                        // Fallback: try to extract meaningful text from payload
+                        const payloadStr = JSON.stringify(h.payload);
+                        // Only use JSON fallback if it's not too long and contains readable text
+                        if (payloadStr.length < 1000 && payloadStr.includes(' ')) {
+                            pageContent = payloadStr;
+                        } else {
+                            pageContent = 'Content not available in readable format';
+                        }
+                    }
+                    
                     return {
-                        pageContent: h.payload?.text || h.payload?.content || JSON.stringify(h.payload),
+                        pageContent: pageContent,
                         metadata: {
                             source: sourceName,
                             score: h.score,
@@ -164,6 +222,70 @@ export async function POST(req: NextRequest) {
                     
                 console.log(`RAG context generated from ${filteredHits.length} sources above threshold ${finalThreshold}`);
                 console.log(`Total sources retrieved: ${allHits.length}, Used in context: ${filteredHits.length}`);
+                
+                // If we have sources but none meet the threshold, create a minimal context
+                if (allHits.length > 0 && filteredHits.length === 0) {
+                    console.log('⚠️ Sources exist but none meet threshold - using minimal context with top sources');
+                    // Use top 3 sources regardless of threshold for minimal context
+                    const topSources = allHits.slice(0, 3).map((h) => {
+                        let sourceName = h.payload?.metadata?.source || 'Unknown Source';
+                        
+                        // Clean source name
+                        const prefixesToRemove = [
+                            'C:\\Users\\User\\Desktop\\github projects\\pulmo-superbot\\assets\\split 11\\',
+                            'C:/Users/User/Desktop/github projects\\pulmo-superbot/assets/split 11/',
+                            '/Users/User/Desktop/github projects\\pulmo-superbot/assets/split 11/',
+                            'C:\\\\Users\\\\User\\\\Desktop\\\\github projects\\\\pulmo-superbot\\\\assets\\\\split 11\\\\'
+                        ];
+                        
+                        for (const prefix of prefixesToRemove) {
+                            if (sourceName.startsWith(prefix)) {
+                                sourceName = sourceName.substring(prefix.length);
+                                break;
+                            }
+                        }
+                        
+                        // Extract text content for fallback context - same logic as above
+                        let pageContent = '';
+                        if (h.payload?.text && typeof h.payload.text === 'string') {
+                            pageContent = h.payload.text;
+                        } else if (h.payload?.content && typeof h.payload.content === 'string') {
+                            pageContent = h.payload.content;
+                        } else if (h.payload?.pageContent && typeof h.payload.pageContent === 'string') {
+                            pageContent = h.payload.pageContent;
+                        } else {
+                            // Fallback: try to extract meaningful text from payload
+                            const payloadStr = JSON.stringify(h.payload);
+                            // Only use JSON fallback if it's not too long and contains readable text
+                            if (payloadStr.length < 1000 && payloadStr.includes(' ')) {
+                                pageContent = payloadStr;
+                            } else {
+                                pageContent = 'Content not available in readable format';
+                            }
+                        }
+                        
+                        return {
+                            pageContent: pageContent,
+                            metadata: {
+                                source: sourceName,
+                                score: h.score,
+                                used: false, // Mark as not meeting threshold
+                                ...Object.fromEntries(
+                                    Object.entries(h.payload?.metadata || {}).filter(([key]) => key !== 'source')
+                                )
+                            }
+                        };
+                    });
+                    
+                    // Create minimal context with warning
+                    context = `[Note: Using sources below threshold for context]\n\n${topSources.map(s => s.pageContent).join('\n---\n')}`;
+                    
+                    // Update sources list to mark these as used for context
+                    sources = sources.map(s => ({
+                        ...s,
+                        used: s.metadata.score >= finalThreshold || topSources.some(ts => ts.metadata.source === s.metadata.source)
+                    }));
+                }
             } else {
                 console.log('Qdrant not configured, using basic chat mode');
             }
@@ -244,10 +366,18 @@ export async function POST(req: NextRequest) {
                         controller.enqueue(encoder.encode(chunk));
                     }
                     
-                    // Add sources information at the end if we have sources
+                    // Add sources metadata at the end
                     if (sources && sources.length > 0) {
-                        const sourcesText = `\n\n---\n**Sources Used:**\n${sources.map((s, i) => `${i + 1}. ${s.metadata.source} (similarity: ${s.metadata.score.toFixed(3)})`).join('\n')}`;
-                        controller.enqueue(encoder.encode(sourcesText));
+                        const sourcesMetadata = JSON.stringify({
+                            type: 'sources_metadata',
+                            sources: sources.map(s => ({
+                                source: s.metadata.source,
+                                score: s.metadata.score,
+                                used: s.metadata.used
+                            }))
+                        });
+                        
+                        controller.enqueue(encoder.encode('\n\n---\n' + sourcesMetadata));
                     }
                     
                     controller.close();
