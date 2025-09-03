@@ -193,6 +193,7 @@ The system supports two embedding providers for maximum flexibility:
    OLLAMA_NUM_BATCH=512
    ```
 -----
+GPU Configuration:
 options: {
   num_gpu: 1,           // Use 1 GPU
   num_ctx: 2048,        // Context window
@@ -519,6 +520,75 @@ const results = await client.search(collectionName, {
 });
 ```
 
+## 🛠️ Troubleshooting
+
+### Docker Issues
+
+#### **Build Error: "src: not found"**
+This error occurs when the Dockerfile tries to copy non-existent directories. **Fixed in current version:**
+
+```bash
+# The Dockerfile now correctly copies only the bulk_embeddings files
+# No more src/ directory dependency
+```
+
+#### **Volume Mount Issues**
+If you encounter volume mounting problems:
+
+```bash
+# Ensure directories exist
+mkdir -p data uploads manifests
+
+# Check file permissions (Linux/Mac)
+chmod 755 data uploads manifests
+```
+
+#### **GPU Support in Docker**
+For GPU acceleration with Ollama in Docker:
+
+```bash
+# Add to docker-compose.yml under bulk-processor service:
+deploy:
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          count: 1
+          capabilities: [gpu]
+```
+
+### Ollama Issues
+
+#### **GPU Not Detected**
+```bash
+# Check if Ollama can see your GPU
+ollama ps
+
+# Start with explicit GPU layers
+OLLAMA_GPU_LAYERS=20 ollama serve
+```
+
+#### **Model Not Found**
+```bash
+# Install the embedding model
+ollama pull nomic-embed-text
+
+# List available models
+ollama list
+```
+
+### Performance Issues
+
+#### **Slow Processing**
+- **Check GPU utilization:** `nvidia-smi` (if using GPU)
+- **Reduce concurrency:** Lower `BULK_CONCURRENCY` to 4-6
+- **Smaller batches:** Reduce `BULK_EMBED_BATCH` to 16-24
+
+#### **Memory Issues**
+- **Reduce GPU layers:** Lower `OLLAMA_GPU_LAYERS` to 10-15
+- **Smaller context:** Reduce `OLLAMA_NUM_CTX` to 1024
+- **Close other applications** using GPU memory
+
 ## 📞 Support
 
 For issues or questions:
@@ -526,7 +596,8 @@ For issues or questions:
 2. Review the manifest database for error details
 3. Check your environment variables and API keys
 4. Verify Qdrant connection and collection status
+5. Test Docker setup: `node test-docker-setup.js`
 
 ---
 
-**🎉 Happy Processing!** This tool is designed to make bulk PDF processing efficient, reliable, and optimized for medical content retrieval.
+**🎉 Happy Processing!** This tool is designed to make bulk PDF processing efficient, reliable, and optimized for medical content retrieval with GPU acceleration.
