@@ -26,15 +26,15 @@ export default function ChatUI() {
 
     // RAG settings
     const [ragSettings, setRagSettings] = useState<RAGSettings>({
-        topK: 12,
-        similarityThreshold: 0.05, // Changed default from 0.80 to 0.05 (within 0.01-0.1 range)
+        topK: 25, // Increased from 12 to 25 for better retrieval
+        similarityThreshold: 0.01, // Lowered from 0.05 to 0.01 for maximum retrieval
         useSystemPrompt: true,
         customSystemPrompt: 'You are a helpful AI assistant. Answer questions based on the provided context and be concise.',
         showSystemPromptInput: false,
         showRagControls: true,
         showUnusedSources: false,
         showUsedSources: false,
-        hydeEnabled: false,
+        hydeEnabled: true, // Enable HyDE for better semantic matching
         autoTuneEnabled: false,
         structuredStreamEnabled: false,
         cragEnabled: false

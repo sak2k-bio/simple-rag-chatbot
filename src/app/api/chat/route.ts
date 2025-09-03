@@ -127,8 +127,8 @@ export async function POST(req: NextRequest) {
         let sources: Array<{ pageContent: string; metadata: { source: string; score: number;[key: string]: any } }> = [];
 
         // Determine Top-K value and threshold (used throughout the function)
-        const finalTopK = topK || 12;
-        const finalThreshold = typeof similarityThreshold === 'number' ? similarityThreshold : 0.1;
+        const finalTopK = topK || 25; // Increased from 12 to 25 for better retrieval
+        const finalThreshold = typeof similarityThreshold === 'number' ? similarityThreshold : 0.01; // Lowered from 0.1 to 0.01
 
         // Try to get context from Qdrant if available
         try {
