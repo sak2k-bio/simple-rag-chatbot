@@ -1,0 +1,30 @@
+# Pulmo RAGbot - TODO List
+
+## ✅ COMPLETED
+- Fixed critical bug: `finalTopK` and `finalThreshold` variables were undefined when Qdrant not configured
+  - Moved variable declarations outside Qdrant configuration block
+  - Variables now available throughout the entire function scope
+  - Fixes ReferenceError that was causing 500 errors in chat API
+- **FIXED SIMILARITY THRESHOLD ISSUE**: Updated default threshold from 0.80 to 0.1/0.05
+  - Frontend: Changed default similarity threshold from 0.80 to 0.05 (even better than 0.1)
+  - Backend: Updated fallback threshold from 0.80 to 0.1
+  - This fixes the issue where sources were being filtered out due to high threshold
+  - Now sources with scores 0.122-0.145 will be included in RAG responses
+  - System will provide rich context instead of falling back to general knowledge
+
+## 🔄 IN PROGRESS
+- Monitor chat API performance after the threshold fix
+- Test RAG functionality with the new optimal threshold
+
+## 📋 PENDING
+- ~~Review and optimize similarity threshold settings (currently 0.80 default)~~ ✅ COMPLETED
+- Consider implementing auto-tuning for similarity thresholds
+- Add more comprehensive error handling for edge cases
+- Performance optimization for large document collections
+- Add unit tests for the chat API route
+
+## 🎯 GOALS
+- Ensure stable chat functionality regardless of Qdrant configuration
+- Maintain backward compatibility with existing implementations
+- Improve error messages and debugging information
+- Optimize RAG performance and accuracy
