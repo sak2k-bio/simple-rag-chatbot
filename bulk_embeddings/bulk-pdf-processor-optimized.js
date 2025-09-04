@@ -24,7 +24,14 @@ const path = require('path');
 const crypto = require('crypto');
 const fg = require('fast-glob');
 const pLimit = require('p-limit');
-const pRetry = require('p-retry');
+let pRetry;
+async function getPRetry() {
+  if (!pRetry) {
+    const mod = await import('p-retry');
+    pRetry = mod.default || mod;
+  }
+  return pRetry;
+}
 const Database = require('better-sqlite3');
 const { QdrantClient } = require('@qdrant/js-client-rest');
 const { google } = require('@ai-sdk/google');
@@ -37,19 +44,23 @@ const {
   QDRANT_API_KEY = '',
   QDRANT_COLLECTION = 'pulmo_fishman',
   GOOGLE_API_KEY,
+  GOOGLE_GENERATIVE_AI_API_KEY,
   OLLAMA_URL = 'http://localhost:11434',
   OLLAMA_MODEL = 'nomic-embed-text',
   EMBEDDING_PROVIDER = 'google', // 'google' or 'ollama'
-  BULK_CONCURRENCY = '8',
-  BULK_EMBED_BATCH = '32',
-  BULK_UPSERT_BATCH = '100',
+  BULK_CONCURRENCY = '12',
+  BULK_EMBED_BATCH = '50',
+  BULK_UPSERT_BATCH = '200',
   OPTIMAL_CHUNK_SIZE = '1000',
   OPTIMAL_CHUNK_OVERLAP = '200'
 } = process.env;
 
+// Resolve Google API key (support both legacy and new env var names)
+const RESOLVED_GOOGLE_API_KEY = GOOGLE_GENERATIVE_AI_API_KEY || GOOGLE_API_KEY;
+
 // Validate required environment variables
-if (EMBEDDING_PROVIDER === 'google' && !GOOGLE_API_KEY) {
-  console.error('❌ GOOGLE_API_KEY is required when using Google embeddings');
+if (EMBEDDING_PROVIDER === 'google' && !RESOLVED_GOOGLE_API_KEY) {
+  console.error('❌ Google API key is required when using Google embeddings. Set GOOGLE_GENERATIVE_AI_API_KEY or GOOGLE_API_KEY.');
   process.exit(1);
 }
 
@@ -71,10 +82,14 @@ const chunkOverlap = Number(OPTIMAL_CHUNK_OVERLAP);
 const client = new QdrantClient({
   url: QDRANT_URL,
   apiKey: QDRANT_API_KEY,
+  checkCompatibility: false // Skip version compatibility check
 });
 
 const collectionName = QDRANT_COLLECTION;
-const embeddingModel = EMBEDDING_PROVIDER === 'ollama' ? null : google.embedding('text-embedding-004');
+let expectedVectorSize = null; // determined in ensureCollection
+// Initialize Google provider explicitly with API key to avoid env name mismatches
+const googleProvider = RESOLVED_GOOGLE_API_KEY ? google({ apiKey: RESOLVED_GOOGLE_API_KEY }) : null;
+const embeddingModel = EMBEDDING_PROVIDER === 'ollama' ? null : googleProvider.embedding('text-embedding-004');
 
 // Initialize database for manifest
 const db = new Database('bulk_manifest_optimized.db');
@@ -139,46 +154,108 @@ async function sha256File(filePath) {
   });
 }
 
-// Enhanced chunking with paragraph awareness
-function findOptimalChunkBoundaries(text, targetSize = 1000, overlap = 200) {
+// Normalize PDF text to preserve paragraphs but fix spacing and hyphenation
+function normalizeText(raw) {
+  let t = raw.replace(/\r\n/g, '\n');
+  // Remove hyphenated line breaks: "exam-\nple" -> "example"
+  t = t.replace(/-\n/g, '');
+  // Collapse 3+ newlines to double newlines (paragraphs)
+  t = t.replace(/\n{3,}/g, '\n\n');
+  // Temporarily mark paragraph breaks
+  t = t.replace(/\n\n/g, '<<PARA>>');
+  // Convert single newlines to spaces
+  t = t.replace(/\n/g, ' ');
+  // Restore paragraph breaks as double newline
+  t = t.replace(/<<PARA>>/g, '\n\n');
+  // Collapse multiple spaces
+  t = t.replace(/[\t ]{2,}/g, ' ');
+  return t.trim();
+}
+
+// Enhanced chunking with sentence and paragraph awareness
+function findOptimalChunkBoundaries(rawText, targetSize = 1000, overlap = 200) {
+  const minSize = Math.floor(targetSize * 0.5); // ensure chunks aren't too tiny
+  const maxSize = Math.floor(targetSize * 1.3);
+
+  const text = normalizeText(rawText);
+
+  // Split into paragraphs first to keep structure
+  const paragraphs = text.split(/\n\n+/);
+
+  // Sentence splitter: split on punctuation followed by space and capital/quote/number
+  const splitSentences = (p) => p
+    .split(/(?<=[.!?])\s+(?=(?:[A-Z"'\(\[]|\d))/)
+    .filter(s => s && s.trim().length > 0);
+
+  const sentences = paragraphs.flatMap(splitSentences);
+
   const chunks = [];
-  let start = 0;
-  
-  while (start < text.length) {
-    let end = Math.min(start + targetSize, text.length);
-    
-    // Try to find a good breaking point (sentence, paragraph, or word boundary)
-    if (end < text.length) {
-      // Look for paragraph breaks first (double newlines)
-      const paragraphEnd = text.lastIndexOf('\n\n', end);
-      // Look for sentence endings
-      const sentenceEnd = text.lastIndexOf('.', end);
-      // Look for word boundaries
-      const wordEnd = text.lastIndexOf(' ', end);
-      
-      if (paragraphEnd > start + targetSize * 0.6) {
-        end = paragraphEnd + 2;
-      } else if (sentenceEnd > start + targetSize * 0.7) {
-        end = sentenceEnd + 1;
-      } else if (wordEnd > start + targetSize * 0.8) {
-        end = wordEnd;
+  let current = '';
+  let cursor = 0; // position in normalized text for start offsets
+
+  const pushChunk = (content) => {
+    const startIdx = text.indexOf(content, cursor);
+    const start = startIdx === -1 ? cursor : startIdx;
+    const end = start + content.length;
+    chunks.push({ text: content, start, end, length: content.length });
+    cursor = end - Math.min(overlap, Math.floor(content.length * 0.2)); // coarse offset tracking
+  };
+
+  for (let i = 0; i < sentences.length; i++) {
+    const s = sentences[i].trim();
+    if (!s) continue;
+
+    if (current.length === 0) {
+      current = s;
+      continue;
+    }
+
+    if ((current.length + 1 + s.length) <= maxSize) {
+      current += ' ' + s;
+    } else {
+      // If current is too small, try to add until minSize
+      if (current.length < minSize) {
+        current += ' ' + s;
+        continue;
+      }
+      // finalize current
+      pushChunk(current);
+      // start new with overlap by appending last sentence of previous chunk if helpful
+      const tail = current.split(/(?<=[.!?])\s+/).slice(-1)[0] || '';
+      current = tail.length > 0 && tail.length < overlap ? tail + ' ' + s : s;
+    }
+  }
+
+  if (current.trim().length > 0) {
+    pushChunk(current.trim());
+  }
+
+  // Merge undersized chunks (forward preference) to avoid tiny fragments
+  let i = 0;
+  while (i < chunks.length) {
+    if (chunks[i].length < minSize) {
+      if (i + 1 < chunks.length) {
+        // Merge with next chunk
+        chunks[i].text = `${chunks[i].text} ${chunks[i + 1].text}`.trim();
+        chunks[i].end = chunks[i].start + chunks[i].text.length;
+        chunks[i].length = chunks[i].text.length;
+        chunks.splice(i + 1, 1);
+        // do not increment i; re-check against minSize in case still small
+        continue;
+      } else if (i - 1 >= 0) {
+        // Merge with previous if this is the last chunk
+        chunks[i - 1].text = `${chunks[i - 1].text} ${chunks[i].text}`.trim();
+        chunks[i - 1].end = chunks[i - 1].start + chunks[i - 1].text.length;
+        chunks[i - 1].length = chunks[i - 1].text.length;
+        chunks.splice(i, 1);
+        // Move index back to re-validate previous
+        i = Math.max(0, i - 1);
+        continue;
       }
     }
-    
-    const chunkText = text.slice(start, end).trim();
-    if (chunkText.length > 50) { // Only include substantial chunks
-      chunks.push({
-        text: chunkText,
-        start: start,
-        end: end,
-        length: chunkText.length
-      });
-    }
-    
-    // Move start position with overlap
-    start = Math.max(start + 1, end - overlap);
+    i += 1;
   }
-  
+
   return chunks;
 }
 
@@ -187,34 +264,34 @@ function extractMetadata(source, content, chunkIndex, totalChunks) {
   // Extract page number from source
   const pageMatch = source.match(/Page_(\d+)/);
   const pageNumber = pageMatch ? parseInt(pageMatch[1]) : null;
-  
+
   // Extract chapter/section info
   const chapterMatch = source.match(/CHAPTER_(\d+)_([^_]+)/);
   const chapterNumber = chapterMatch ? parseInt(chapterMatch[1]) : null;
   const chapterTitle = chapterMatch ? chapterMatch[2].replace(/_/g, ' ') : null;
-  
+
   // Extract part info
   const partMatch = source.match(/PART_(\d+)_([^_]+)/);
   const partNumber = partMatch ? parseInt(partMatch[1]) : null;
   const partTitle = partMatch ? partMatch[2].replace(/_/g, ' ') : null;
-  
+
   // Extract key terms from content
   const preview = content.substring(0, 300).toLowerCase();
   const keyTerms = [];
-  
+
   const medicalTerms = [
-    'asthma', 'copd', 'pneumonia', 'cancer', 'treatment', 'diagnosis', 'symptoms', 
+    'asthma', 'copd', 'pneumonia', 'cancer', 'treatment', 'diagnosis', 'symptoms',
     'therapy', 'medication', 'lung', 'respiratory', 'pulmonary', 'bronchitis',
     'emphysema', 'fibrosis', 'tuberculosis', 'covid', 'influenza', 'pneumothorax',
     'pleural', 'alveolar', 'bronchial', 'tracheal', 'ventilation', 'oxygenation'
   ];
-  
+
   medicalTerms.forEach(term => {
     if (preview.includes(term)) {
       keyTerms.push(term);
     }
   });
-  
+
   return {
     source: source,
     pageNumber: pageNumber,
@@ -249,7 +326,7 @@ async function getOllamaEmbedding(text) {
     }, {
       timeout: 60000 // 60 second timeout for GPU processing
     });
-    
+
     if (response.data && response.data.embedding) {
       return response.data.embedding;
     } else {
@@ -268,12 +345,12 @@ async function testOllamaConnection() {
   try {
     log(`Testing Ollama connection at ${OLLAMA_URL}...`);
     const response = await axios.get(`${OLLAMA_URL}/api/tags`, { timeout: 5000 });
-    
+
     if (response.data && response.data.models) {
       const modelExists = response.data.models.some(model => model.name.includes(OLLAMA_MODEL));
       if (modelExists) {
         log(`✅ Ollama connection successful, model '${OLLAMA_MODEL}' found`);
-        
+
         // Test GPU acceleration
         try {
           const gpuTest = await axios.post(`${OLLAMA_URL}/api/embeddings`, {
@@ -281,14 +358,14 @@ async function testOllamaConnection() {
             prompt: 'GPU test',
             options: { num_gpu: 1 }
           }, { timeout: 10000 });
-          
+
           if (gpuTest.data && gpuTest.data.embedding) {
             log(`🚀 GPU acceleration detected and working!`, 'success');
           }
         } catch (gpuError) {
           log(`⚠️  GPU acceleration not available, using CPU mode`, 'warning');
         }
-        
+
         return true;
       } else {
         log(`⚠️  Ollama connected but model '${OLLAMA_MODEL}' not found. Available models:`, 'warning');
@@ -307,7 +384,7 @@ async function ensureCollection() {
   try {
     const collections = await client.getCollections();
     const collectionExists = collections.collections.some(c => c.name === collectionName);
-    
+
     // Determine vector size based on embedding provider
     let vectorSize = 768; // Default for Google text-embedding-004
     if (EMBEDDING_PROVIDER === 'ollama') {
@@ -316,7 +393,7 @@ async function ensureCollection() {
       if (!isConnected) {
         throw new Error('Ollama connection failed');
       }
-      
+
       // Get vector size from Ollama model
       try {
         const testEmbedding = await getOllamaEmbedding('test');
@@ -326,15 +403,21 @@ async function ensureCollection() {
         log(`⚠️  Could not determine vector size, using default 768`, 'warning');
       }
     }
-    
+
     if (!collectionExists) {
       log(`Creating collection: ${collectionName} with ${vectorSize} dimensions`);
       await client.createCollection(collectionName, {
-        vectors: { size: vectorSize }
+        vectors: {
+          size: vectorSize,
+          distance: 'Cosine'
+        }
       });
     }
-    
-    log(`Collection '${collectionName}' is ready`);
+
+    // Save expected vector size by reading collection config to be certain
+    const collInfo = await client.getCollection(collectionName);
+    expectedVectorSize = collInfo.config?.params?.vectors?.size || vectorSize;
+    log(`Collection '${collectionName}' is ready (vector size: ${expectedVectorSize})`);
   } catch (error) {
     log(`Collection initialization error: ${error.message}`, 'error');
     throw error;
@@ -344,21 +427,21 @@ async function ensureCollection() {
 async function embedBatch(texts) {
   try {
     log(`Embedding batch of ${texts.length} texts using ${EMBEDDING_PROVIDER}`);
-    
-    const embeddings = await pRetry(
+
+    const embeddings = await (await getPRetry())(
       async () => {
         const results = [];
-        
+
         if (EMBEDDING_PROVIDER === 'ollama') {
           // For GPU-accelerated Ollama, we can process in parallel
           // Create chunks for parallel processing to avoid overwhelming GPU
-          const chunkSize = 4; // Process 4 texts in parallel for 12GB VRAM
+          const chunkSize = 8; // Process 8 texts in parallel for 12GB VRAM (increased for large batches)
           const chunks = [];
-          
+
           for (let i = 0; i < texts.length; i += chunkSize) {
             chunks.push(texts.slice(i, i + chunkSize));
           }
-          
+
           // Process chunks in parallel
           for (const chunk of chunks) {
             const chunkPromises = chunk.map(text => getOllamaEmbedding(text));
@@ -375,7 +458,7 @@ async function embedBatch(texts) {
             results.push(result.embedding);
           }
         }
-        
+
         return results;
       },
       {
@@ -386,7 +469,7 @@ async function embedBatch(texts) {
         randomize: true
       }
     );
-    
+
     return embeddings;
   } catch (error) {
     log(`Embedding failed: ${error.message}`, 'error');
@@ -396,12 +479,70 @@ async function embedBatch(texts) {
 
 async function upsertBatch(points) {
   try {
+    // Validate vectors length if we know expected size
+    if (expectedVectorSize) {
+      const invalid = points.find((p) => !Array.isArray(p.vector) || p.vector.length !== expectedVectorSize || p.vector.some((v) => typeof v !== 'number' || Number.isNaN(v)));
+      if (invalid) {
+        throw new Error(`Vector dimensionality mismatch or invalid values. Expected ${expectedVectorSize}, got ${Array.isArray(invalid.vector) ? invalid.vector.length : 'non-array'}`);
+      }
+    }
+    // Preflight diagnostics
+    const sample = points[0];
+    if (sample) {
+      const vecLen = Array.isArray(sample.vector) ? sample.vector.length : 'non-array';
+      const vecType = Array.isArray(sample.vector) ? typeof sample.vector[0] : typeof sample.vector;
+      const payloadSize = Buffer.byteLength(JSON.stringify(sample.payload || {}), 'utf8');
+      log(`Upserting ${points.length} points (sample id=${sample.id}, vecLen=${vecLen}, vecType=${vecType}, payloadBytes≈${payloadSize})`);
+    }
+
     await client.upsert(collectionName, {
-      points: points
+      points: points,
+      wait: true
     });
     log(`Upserted batch of ${points.length} points`);
   } catch (error) {
-    log(`Upsert failed: ${error.message}`, 'error');
+    let details = '';
+    try {
+      if (error && error.response && error.response.data) {
+        details = ` Details: ${JSON.stringify(error.response.data)}`;
+      } else if (error && error.body) {
+        details = ` Details: ${JSON.stringify(error.body)}`;
+      } else {
+        const plain = JSON.stringify(error, Object.getOwnPropertyNames(error));
+        details = plain ? ` Details: ${plain}` : '';
+      }
+    } catch (_) {}
+
+    // Log shallow schema of sample payload to help diagnose
+    try {
+      const sample = points[0];
+      if (sample) {
+        const payloadKeys = Object.keys(sample.payload || {});
+        const payloadTypes = Object.fromEntries(payloadKeys.map(k => [k, typeof sample.payload[k]]));
+        log(`Sample payload keys=${payloadKeys.join(', ')} types=${JSON.stringify(payloadTypes)}`);
+      }
+    } catch (_) {}
+
+    log(`Upsert failed: ${error.message || String(error)}${details}`, 'error');
+
+    // Fallback: try direct REST call to capture full error body
+    try {
+      const url = `${QDRANT_URL.replace(/\/$/, '')}/collections/${encodeURIComponent(collectionName)}/points?wait=true`;
+      const body = { points };
+      log(`Attempting direct REST upsert to ${url} with ${points.length} points for diagnostics...`);
+      const resp = await axios.put(url, body, {
+        headers: QDRANT_API_KEY ? { 'api-key': QDRANT_API_KEY, 'content-type': 'application/json' } : { 'content-type': 'application/json' },
+        timeout: 20000
+      });
+      log(`Direct REST upsert response: status=${resp.status} data=${JSON.stringify(resp.data).slice(0, 500)}...`);
+    } catch (restErr) {
+      try {
+        const restDetails = restErr?.response?.data ? JSON.stringify(restErr.response.data) : JSON.stringify(restErr, Object.getOwnPropertyNames(restErr));
+        log(`Direct REST upsert failed: ${restErr.message}. Details: ${restDetails}`, 'error');
+      } catch (_) {
+        log(`Direct REST upsert failed: ${restErr.message}`, 'error');
+      }
+    }
     throw error;
   }
 }
@@ -409,7 +550,7 @@ async function upsertBatch(points) {
 async function processFile(filePath) {
   const normalizedPath = path.normalize(filePath);
   const checksum = await sha256File(normalizedPath);
-  
+
   // Check if already processed
   const existing = getFileStmt.get(normalizedPath);
   if (existing && existing.status === 'completed' && existing.checksum === checksum) {
@@ -443,22 +584,22 @@ async function processFile(filePath) {
     const pdfModule = await import('pdf-parse/lib/pdf-parse.js');
     const pdfParse = pdfModule.default || pdfModule;
     const data = await pdfParse(buffer);
-    
+
     if (!data || !data.text || !data.text.trim()) {
       throw new Error('No text extracted from PDF');
     }
 
-    const text = data.text.replace(/\r\n/g, '\n').trim();
-    
+    const text = normalizeText(data.text);
+
     // Use optimized chunking with paragraph awareness
     const optimizedChunks = findOptimalChunkBoundaries(text, chunkSize, chunkOverlap);
-    
+
     log(`Processing ${path.basename(normalizedPath)}: ${optimizedChunks.length} optimized chunks`);
 
     // Embed in batches
     const vectors = [];
     const chunkTexts = optimizedChunks.map(chunk => chunk.text);
-    
+
     for (let i = 0; i < chunkTexts.length; i += embedBatchSize) {
       const batch = chunkTexts.slice(i, i + embedBatchSize);
       const batchVecs = await embedBatch(batch);
@@ -466,24 +607,29 @@ async function processFile(filePath) {
     }
 
     // Create points with enhanced metadata
+    const displaySource = path.basename(normalizedPath);
     const points = optimizedChunks.map((chunkData, idx) => {
-      const metadata = extractMetadata(normalizedPath, chunkData.text, idx, optimizedChunks.length);
-      
+      const metadata = extractMetadata(displaySource, chunkData.text, idx, optimizedChunks.length);
+      // Generate a valid Qdrant ID (UUIDv4) and keep a deterministic hash for dedupe/traceability
+      const deterministicHash = crypto.createHash('sha1').update(`${normalizedPath}|${idx}|optimized`).digest('hex');
+      const pointId = crypto.randomUUID();
+
       return {
-        id: crypto.createHash('sha1').update(`${normalizedPath}|${idx}|optimized`).digest('hex'),
+        id: pointId,
         vector: vectors[idx],
         payload: {
           text: chunkData.text,
           content: chunkData.text,
           pageContent: chunkData.text,
           metadata: metadata,
-          source: normalizedPath,
+          source: displaySource,
           chunkIndex: idx,
           totalChunks: optimizedChunks.length,
           chunkStart: chunkData.start,
           chunkEnd: chunkData.end,
           chunkLength: chunkData.length,
           optimized: true,
+          dedupeId: deterministicHash,
           timestamp: new Date().toISOString()
         }
       };
@@ -510,7 +656,7 @@ async function processFile(filePath) {
   } catch (error) {
     const errorMsg = error.message || 'Unknown error';
     log(`❌ Failed to process ${path.basename(normalizedPath)}: ${errorMsg}`, 'error');
-    
+
     // Mark as error
     upsertFileStmt.run({
       path: normalizedPath,
@@ -520,7 +666,7 @@ async function processFile(filePath) {
       chunks_count: 0,
       updated_at: nowIso()
     });
-    
+
     throw error;
   }
 }
@@ -651,7 +797,7 @@ async function main() {
     log(`   ❌ Errors: ${finalStats.errors}`);
     log(`   📝 Total Chunks: ${finalStats.total_chunks}`);
     log(`   ⏱️  Total Time: ${totalTime} seconds`);
-    
+
     log(`\n🎯 Optimization Benefits:`);
     log(`   ✅ Optimal chunk sizes (${chunkSize} chars with semantic boundaries)`);
     log(`   ✅ Paragraph awareness (respects document structure)`);

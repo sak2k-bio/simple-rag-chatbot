@@ -24,7 +24,14 @@ const path = require('path');
 const crypto = require('crypto');
 const fg = require('fast-glob');
 const pLimit = require('p-limit');
-const pRetry = require('p-retry');
+let pRetry;
+async function getPRetry() {
+  if (!pRetry) {
+    const mod = await import('p-retry');
+    pRetry = mod.default || mod;
+  }
+  return pRetry;
+}
 const Database = require('better-sqlite3');
 const { QdrantClient } = require('@qdrant/js-client-rest');
 const { google } = require('@ai-sdk/google');
@@ -132,10 +139,10 @@ async function sha256File(filePath) {
 function findOptimalChunkBoundaries(text, targetSize = 1000, overlap = 200) {
   const chunks = [];
   let start = 0;
-  
+
   while (start < text.length) {
     let end = Math.min(start + targetSize, text.length);
-    
+
     // Try to find a good breaking point (sentence, paragraph, or word boundary)
     if (end < text.length) {
       // Look for paragraph breaks first (double newlines)
@@ -144,7 +151,7 @@ function findOptimalChunkBoundaries(text, targetSize = 1000, overlap = 200) {
       const sentenceEnd = text.lastIndexOf('.', end);
       // Look for word boundaries
       const wordEnd = text.lastIndexOf(' ', end);
-      
+
       if (paragraphEnd > start + targetSize * 0.6) {
         end = paragraphEnd + 2;
       } else if (sentenceEnd > start + targetSize * 0.7) {
@@ -153,7 +160,7 @@ function findOptimalChunkBoundaries(text, targetSize = 1000, overlap = 200) {
         end = wordEnd;
       }
     }
-    
+
     const chunkText = text.slice(start, end).trim();
     if (chunkText.length > 50) { // Only include substantial chunks
       chunks.push({
@@ -163,11 +170,11 @@ function findOptimalChunkBoundaries(text, targetSize = 1000, overlap = 200) {
         length: chunkText.length
       });
     }
-    
+
     // Move start position with overlap
     start = Math.max(start + 1, end - overlap);
   }
-  
+
   return chunks;
 }
 
@@ -176,34 +183,34 @@ function extractMetadata(source, content, chunkIndex, totalChunks) {
   // Extract page number from source
   const pageMatch = source.match(/Page_(\d+)/);
   const pageNumber = pageMatch ? parseInt(pageMatch[1]) : null;
-  
+
   // Extract chapter/section info
   const chapterMatch = source.match(/CHAPTER_(\d+)_([^_]+)/);
   const chapterNumber = chapterMatch ? parseInt(chapterMatch[1]) : null;
   const chapterTitle = chapterMatch ? chapterMatch[2].replace(/_/g, ' ') : null;
-  
+
   // Extract part info
   const partMatch = source.match(/PART_(\d+)_([^_]+)/);
   const partNumber = partMatch ? parseInt(partMatch[1]) : null;
   const partTitle = partMatch ? partMatch[2].replace(/_/g, ' ') : null;
-  
+
   // Extract key terms from content
   const preview = content.substring(0, 300).toLowerCase();
   const keyTerms = [];
-  
+
   const medicalTerms = [
-    'asthma', 'copd', 'pneumonia', 'cancer', 'treatment', 'diagnosis', 'symptoms', 
+    'asthma', 'copd', 'pneumonia', 'cancer', 'treatment', 'diagnosis', 'symptoms',
     'therapy', 'medication', 'lung', 'respiratory', 'pulmonary', 'bronchitis',
     'emphysema', 'fibrosis', 'tuberculosis', 'covid', 'influenza', 'pneumothorax',
     'pleural', 'alveolar', 'bronchial', 'tracheal', 'ventilation', 'oxygenation'
   ];
-  
+
   medicalTerms.forEach(term => {
     if (preview.includes(term)) {
       keyTerms.push(term);
     }
   });
-  
+
   return {
     source: source,
     pageNumber: pageNumber,
@@ -224,14 +231,14 @@ async function ensureCollection() {
   try {
     const collections = await client.getCollections();
     const collectionExists = collections.collections.some(c => c.name === collectionName);
-    
+
     if (!collectionExists) {
       log(`Creating collection: ${collectionName}`);
       await client.createCollection(collectionName, {
         vectors: { size: 768 } // text-embedding-004 has 768 dimensions
       });
     }
-    
+
     log(`Collection '${collectionName}' is ready`);
   } catch (error) {
     log(`Collection initialization error: ${error.message}`, 'error');
@@ -242,8 +249,8 @@ async function ensureCollection() {
 async function embedBatch(texts) {
   try {
     log(`Embedding batch of ${texts.length} texts`);
-    
-    const embeddings = await pRetry(
+
+    const embeddings = await (await getPRetry())(
       async () => {
         const results = [];
         for (const text of texts) {
@@ -263,7 +270,7 @@ async function embedBatch(texts) {
         randomize: true
       }
     );
-    
+
     return embeddings;
   } catch (error) {
     log(`Embedding failed: ${error.message}`, 'error');
@@ -286,7 +293,7 @@ async function upsertBatch(points) {
 async function processFile(filePath) {
   const normalizedPath = path.normalize(filePath);
   const checksum = await sha256File(normalizedPath);
-  
+
   // Check if already processed
   const existing = getFileStmt.get(normalizedPath);
   if (existing && existing.status === 'completed' && existing.checksum === checksum) {
@@ -320,22 +327,22 @@ async function processFile(filePath) {
     const pdfModule = await import('pdf-parse/lib/pdf-parse.js');
     const pdfParse = pdfModule.default || pdfModule;
     const data = await pdfParse(buffer);
-    
+
     if (!data || !data.text || !data.text.trim()) {
       throw new Error('No text extracted from PDF');
     }
 
     const text = data.text.replace(/\r\n/g, '\n').trim();
-    
+
     // Use optimized chunking with paragraph awareness
     const optimizedChunks = findOptimalChunkBoundaries(text, chunkSize, chunkOverlap);
-    
+
     log(`Processing ${path.basename(normalizedPath)}: ${optimizedChunks.length} optimized chunks`);
 
     // Embed in batches
     const vectors = [];
     const chunkTexts = optimizedChunks.map(chunk => chunk.text);
-    
+
     for (let i = 0; i < chunkTexts.length; i += embedBatchSize) {
       const batch = chunkTexts.slice(i, i + embedBatchSize);
       const batchVecs = await embedBatch(batch);
@@ -345,7 +352,7 @@ async function processFile(filePath) {
     // Create points with enhanced metadata
     const points = optimizedChunks.map((chunkData, idx) => {
       const metadata = extractMetadata(normalizedPath, chunkData.text, idx, optimizedChunks.length);
-      
+
       return {
         id: crypto.createHash('sha1').update(`${normalizedPath}|${idx}|optimized`).digest('hex'),
         vector: vectors[idx],
@@ -387,7 +394,7 @@ async function processFile(filePath) {
   } catch (error) {
     const errorMsg = error.message || 'Unknown error';
     log(`❌ Failed to process ${path.basename(normalizedPath)}: ${errorMsg}`, 'error');
-    
+
     // Mark as error
     upsertFileStmt.run({
       path: normalizedPath,
@@ -397,7 +404,7 @@ async function processFile(filePath) {
       chunks_count: 0,
       updated_at: nowIso()
     });
-    
+
     throw error;
   }
 }
@@ -522,7 +529,7 @@ async function main() {
     log(`   ❌ Errors: ${finalStats.errors}`);
     log(`   📝 Total Chunks: ${finalStats.total_chunks}`);
     log(`   ⏱️  Total Time: ${totalTime} seconds`);
-    
+
     log(`\n🎯 Optimization Benefits:`);
     log(`   ✅ Optimal chunk sizes (${chunkSize} chars with semantic boundaries)`);
     log(`   ✅ Paragraph awareness (respects document structure)`);

@@ -12,14 +12,19 @@ services:
       - ./.env.local:/app/.env.local:ro
     environment:
       - NODE_ENV=production
-      - BULK_CONCURRENCY=8
-      - BULK_EMBED_BATCH=32
-      - BULK_UPSERT_BATCH=100
+      - BULK_CONCURRENCY=12
+      - BULK_EMBED_BATCH=50
+      - BULK_UPSERT_BATCH=200
       - OPTIMAL_CHUNK_SIZE=1000
       - OPTIMAL_CHUNK_OVERLAP=200
       - OLLAMA_GPU_LAYERS=20
       - OLLAMA_NUM_CTX=2048
       - OLLAMA_NUM_BATCH=512
+      # Point containers to the host's Ollama instance
+      - OLLAMA_URL=http://host.docker.internal:11434
+      - OLLAMA_MODEL=nomic-embed-text
+      - QDRANT_URL=http://qdrant:6333
+      # Leave QDRANT_API_KEY empty for local development
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3001/health"]

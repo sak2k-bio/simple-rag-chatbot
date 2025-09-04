@@ -208,18 +208,21 @@ options: {
 
 ### 🚀 **GPU Performance Optimization:**
 
-#### **For 12GB VRAM (Your Setup):**
-- **Concurrency:** 8 (increased from 6)
-- **Embed Batch:** 32 (optimized for GPU memory)
+#### **For 12GB VRAM (Your Setup) - Large Scale Processing:**
+- **Concurrency:** 12 (increased for 5000+ PDFs)
+- **Embed Batch:** 50 (optimized for large-scale processing)
+- **Upsert Batch:** 200 (increased for efficiency)
 - **GPU Layers:** 20 (utilizes most of your VRAM)
 - **Context Window:** 2048 (optimal for embeddings)
 - **Batch Size:** 512 (GPU processing batch)
+- **File Limit:** 5000 PDFs per upload
 
 #### **Expected Performance:**
 - **Speed:** 3-5x faster than CPU-only Ollama
-- **Throughput:** ~50-100 texts/second (vs ~10-30 CPU-only)
+- **Throughput:** ~100-200 texts/second (vs ~10-30 CPU-only)
 - **Memory Usage:** ~8-10GB VRAM utilization
-- **Processing Time:** 100 PDFs in ~20-40 minutes (vs 60-90 minutes CPU-only)
+- **Processing Time:** 1000 PDFs in ~2-4 hours (vs 8-12 hours CPU-only)
+- **Large Scale:** Supports 5000+ PDFs in a single batch
 
 ### 🎯 **Web UI Configuration:**
 The web interface allows you to switch between providers and configure Ollama settings:
@@ -254,9 +257,9 @@ BULK_CONCURRENCY=8 OPTIMAL_CHUNK_SIZE=1200 node bulk_embeddings/bulk-pdf-process
 | `GOOGLE_API_KEY` | *required* | Google AI API key (when using Google) |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama server URL (when using Ollama) |
 | `OLLAMA_MODEL` | `nomic-embed-text` | Ollama embedding model |
-| `BULK_CONCURRENCY` | `8` | Number of files to process simultaneously (GPU-optimized) |
-| `BULK_EMBED_BATCH` | `32` | Number of texts to embed in one batch (GPU-optimized) |
-| `BULK_UPSERT_BATCH` | `100` | Number of vectors to upsert in one batch |
+| `BULK_CONCURRENCY` | `12` | Number of files to process simultaneously (large-scale optimized) |
+| `BULK_EMBED_BATCH` | `50` | Number of texts to embed in one batch (large-scale optimized) |
+| `BULK_UPSERT_BATCH` | `200` | Number of vectors to upsert in one batch (large-scale optimized) |
 | `OPTIMAL_CHUNK_SIZE` | `1000` | Target chunk size in characters |
 | `OPTIMAL_CHUNK_OVERLAP` | `200` | Overlap between chunks in characters |
 | `OLLAMA_GPU_LAYERS` | `20` | GPU layers for 12GB VRAM optimization |
@@ -530,6 +533,57 @@ This error occurs when the Dockerfile tries to copy non-existent directories. **
 ```bash
 # The Dockerfile now correctly copies only the bulk_embeddings files
 # No more src/ directory dependency
+```
+
+#### **Build Error: "npm ci --only=production"**
+This error occurs with newer npm versions where `--only=production` is deprecated. **Fixed in current version:**
+
+```bash
+# Updated to use the modern npm syntax without package-lock.json dependency
+RUN npm install --omit=dev --no-package-lock
+```
+
+#### **Runtime Error: "Cannot find module '/app/bulk_embeddings/web-ui/server.js'"**
+This error occurs when the Docker CMD path doesn't match the copied file structure. **Fixed in current version:**
+
+```bash
+# Updated CMD to use correct path after COPY . ./
+CMD ["node", "web-ui/server.js"]
+```
+
+#### **Upload Error: "MulterError: Unexpected field"**
+This error occurs when uploading many files or large files. **Fixed in current version:**
+
+```bash
+# Updated Multer limits for large-scale processing
+limits: {
+  fileSize: 100 * 1024 * 1024, // 100MB per file
+  files: 5000, // Allow up to 5000 files
+  fieldSize: 10 * 1024 * 1024, // 10MB field size
+  fieldNameSize: 1000, // 1000 characters for field name
+  parts: 10000 // Allow up to 10000 parts
+}
+```
+
+#### **Qdrant Connection Issues**
+**Warning: "Api key is used with unsecure connection"**
+This is just a warning for local development. **Fixed in current version:**
+
+```bash
+# For local development, leave QDRANT_API_KEY empty
+# QDRANT_API_KEY=  # Comment out or leave empty
+```
+
+**Error: "Failed to obtain server version"**
+This occurs when Qdrant client can't verify version compatibility. **Fixed in current version:**
+
+```bash
+# Added checkCompatibility: false to QdrantClient
+const client = new QdrantClient({
+  url: QDRANT_URL,
+  apiKey: QDRANT_API_KEY,
+  checkCompatibility: false // Skip version compatibility check
+});
 ```
 
 #### **Volume Mount Issues**

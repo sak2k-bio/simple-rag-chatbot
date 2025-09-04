@@ -13,10 +13,10 @@ RUN apk add --no-cache \
 WORKDIR /app
 
 # Copy package files
-COPY package*.json ./
+COPY package.json ./
 
-# Install dependencies
-RUN npm ci --only=production
+# Install dependencies (production only)
+RUN npm install --omit=dev --no-package-lock
 
 # Copy application files
 COPY . ./
@@ -32,4 +32,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:3001/health || exit 1
 
 # Default command
-CMD ["node", "bulk_embeddings/web-ui/server.js"]
+CMD ["node", "web-ui/server.js"]

@@ -54,7 +54,7 @@ try {
   const checks = [
     { name: 'Node.js base image', pattern: /FROM node:/ },
     { name: 'System dependencies', pattern: /apk add/ },
-    { name: 'Package installation', pattern: /npm ci/ },
+    { name: 'Package installation', pattern: /npm install --omit=dev/ },
     { name: 'Port exposure', pattern: /EXPOSE 3001/ },
     { name: 'Health check', pattern: /HEALTHCHECK/ }
   ];

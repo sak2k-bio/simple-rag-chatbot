@@ -39,14 +39,40 @@ const MANIFEST_DIR = process.env.MANIFEST_DIR || '/app/manifests';
   }
 });
 
+// Helper: sanitize filenames to avoid unsafe characters
+function sanitizeFilename(name) {
+  const parsed = path.parse(name);
+  const base = parsed.name
+    .replace(/[^a-zA-Z0-9._-]+/g, '_')   // replace unsafe chars
+    .replace(/_{2,}/g, '_')              // collapse multiple underscores
+    .slice(0, 200)                       // limit length
+    || 'upload';
+  const ext = (parsed.ext || '.pdf').toLowerCase();
+  return base + ext;
+}
+
 // Multer configuration for file uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, UPLOAD_DIR);
   },
   filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+    try {
+      const desired = sanitizeFilename(file.originalname || 'upload.pdf');
+      let finalName = desired;
+      const fullPath = (name) => path.join(UPLOAD_DIR, name);
+      // If a file with same name exists, append timestamp to avoid overwrite
+      if (fs.existsSync(fullPath(finalName))) {
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        const p = path.parse(finalName);
+        finalName = `${p.name}-${ts}${p.ext}`;
+      }
+      cb(null, finalName);
+    } catch (e) {
+      // Fallback to random if anything goes wrong
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      cb(null, 'pdfs-' + uniqueSuffix + path.extname(file.originalname || '.pdf'));
+    }
   }
 });
 
@@ -60,14 +86,19 @@ const upload = multer({
     }
   },
   limits: {
-    fileSize: 100 * 1024 * 1024 // 100MB limit
+    fileSize: 100 * 1024 * 1024, // 100MB per file
+    files: 5000, // Allow up to 5000 files
+    fieldSize: 10 * 1024 * 1024, // 10MB field size
+    fieldNameSize: 1000, // 1000 characters for field name
+    parts: 10000 // Allow up to 10000 parts
   }
 });
 
 // Qdrant client
 const qdrantClient = new QdrantClient({
   url: process.env.QDRANT_URL || 'http://localhost:6333',
-  apiKey: process.env.QDRANT_API_KEY || ''
+  apiKey: process.env.QDRANT_API_KEY || '',
+  checkCompatibility: false // Skip version compatibility check
 });
 
 // Store active processes
@@ -197,7 +228,7 @@ app.get('/api/manifest-stats', (req, res) => {
 });
 
 // Upload PDFs
-app.post('/api/upload', upload.array('pdfs', 10), (req, res) => {
+app.post('/api/upload', upload.array('pdfs', 5000), (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'No files uploaded' });
@@ -225,7 +256,7 @@ app.post('/api/process', async (req, res) => {
     const { 
       sourceDirectory = UPLOAD_DIR,
       embeddingProvider = 'google',
-      ollamaUrl = 'http://localhost:11434',
+      ollamaUrl = (process.env.OLLAMA_URL || 'http://localhost:11434'),
       ollamaModel = 'nomic-embed-text',
       concurrency = 6,
       embedBatch = 50,

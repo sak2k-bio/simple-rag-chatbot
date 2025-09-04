@@ -183,6 +183,13 @@
             color: #742a2a;
             border: 1px solid #feb2b2;
         }
+        
+        #loadingIndicator {
+            display: block;
+            color: #666;
+            font-size: 14px;
+            margin-top: 10px;
+        }
 
         .status.info {
             background-color: #bee3f8;
@@ -319,6 +326,9 @@
         <div class="header">
             <h1>🚀 Bulk PDF Processor</h1>
             <p>Production-ready PDF processing with optimized chunking and paragraph awareness</p>
+            <div id="loadingIndicator" style="display: none; color: #666; font-size: 14px;">
+                ⏳ Loading...
+            </div>
         </div>
 
         <div class="grid">
@@ -363,8 +373,8 @@
                 <!-- Processing Settings -->
                 <div class="form-group">
                     <label for="concurrency">Concurrency (parallel files):</label>
-                    <input type="number" id="concurrency" value="8" min="1" max="16">
-                    <small style="color: #666;">GPU-optimized: 8 (was 6)</small>
+                    <input type="number" id="concurrency" value="12" min="1" max="20">
+                    <small style="color: #666;">Large-scale optimized: 12 (supports 5000+ PDFs)</small>
                 </div>
                 <div class="form-group">
                     <label for="chunkSize">Chunk Size (characters):</label>
@@ -376,12 +386,13 @@
                 </div>
                 <div class="form-group">
                     <label for="embedBatch">Embed Batch Size:</label>
-                    <input type="number" id="embedBatch" value="32" min="10" max="100">
-                    <small style="color: #666;">GPU-optimized: 32 (was 50)</small>
+                    <input type="number" id="embedBatch" value="50" min="10" max="100">
+                    <small style="color: #666;">Large-scale optimized: 50 (supports 5000+ PDFs)</small>
                 </div>
                 <div class="form-group">
                     <label for="upsertBatch">Upsert Batch Size:</label>
-                    <input type="number" id="upsertBatch" value="100" min="20" max="200">
+                    <input type="number" id="upsertBatch" value="200" min="20" max="500">
+                    <small style="color: #666;">Large-scale optimized: 200 (was 100)</small>
                 </div>
             </div>
         </div>
@@ -424,11 +435,54 @@
 
         // Initialize
         document.addEventListener('DOMContentLoaded', function() {
-            setupFileUpload();
-            refreshStats();
-            refreshCollectionInfo();
-            checkOllamaStatus();
+            // Check server health first
+            checkServerHealth().then(() => {
+                // Hide loading indicator once page is loaded
+                const loadingIndicator = document.getElementById('loadingIndicator');
+                if (loadingIndicator) {
+                    loadingIndicator.style.display = 'none';
+                }
+                
+                setupFileUpload();
+                
+                // Check Ollama status after a short delay to avoid blocking page load
+                setTimeout(() => {
+                    checkOllamaStatus().catch(error => {
+                        console.log('Ollama status check failed (this is normal if Ollama is not running):', error.message);
+                    });
+                }, 1000);
+            }).catch(error => {
+                console.error('Server health check failed:', error);
+                // Still hide loading indicator and show page
+                const loadingIndicator = document.getElementById('loadingIndicator');
+                if (loadingIndicator) {
+                    loadingIndicator.style.display = 'none';
+                }
+                setupFileUpload();
+            });
         });
+        
+        // Check server health
+        async function checkServerHealth() {
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 3000);
+                
+                const response = await fetch('/health', { 
+                    signal: controller.signal 
+                });
+                clearTimeout(timeoutId);
+                
+                if (!response.ok) {
+                    throw new Error(`Server health check failed: ${response.status}`);
+                }
+                console.log('Server health check passed');
+                return true;
+            } catch (error) {
+                console.error('Server health check failed:', error);
+                throw error;
+            }
+        }
 
         // File upload setup
         function setupFileUpload() {
@@ -459,9 +513,12 @@
             uploadFiles(files);
         }
 
-        function handleFileSelect(e) {
-            const files = e.target.files;
-            uploadFiles(files);
+        async function handleFileSelect(e) {
+            const input = e.target;
+            const files = input.files;
+            await uploadFiles(files);
+            // Reset input so selecting the same file again fires 'change'
+            input.value = '';
         }
 
         async function uploadFiles(files) {
@@ -531,6 +588,9 @@
                 if (response.ok) {
                     showStatus('success', result.message);
                     refreshFileList();
+                    // Also reset the file input so the same file can be re-added
+                    const fi = document.getElementById('fileInput');
+                    if (fi) fi.value = '';
                 } else {
                     showStatus('error', result.error);
                 }
@@ -555,11 +615,27 @@
         // Check Ollama status
         async function checkOllamaStatus() {
             try {
-                const response = await fetch('/api/ollama-status');
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 5000);
+                
+                const response = await fetch('/api/ollama-status', { 
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
                 const result = await response.json();
                 
                 const statusDiv = document.getElementById('ollamaStatus');
                 if (result.connected) {
+                    // If the UI input still has the localhost default, replace it with the container-reachable URL
+                    const urlInput = document.getElementById('ollamaUrl');
+                    if (urlInput && (!urlInput.value || urlInput.value === 'http://localhost:11434')) {
+                        urlInput.value = result.url;
+                    }
                     if (result.modelExists) {
                         statusDiv.innerHTML = `
                             <div class="status success">
