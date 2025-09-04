@@ -9,32 +9,9 @@
   --text-secondary: #475569;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+/* Theme at-rule removed; using CSS variables directly. */
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0f172a;
-    --foreground: #f1f5f9;
-    --card-bg: #1e293b;
-    --border-color: #334155;
-    --text-muted: #94a3b8;
-    --text-secondary: #cbd5e1;
-  }
-}
-
-.dark {
-  --background: #0f172a;
-  --foreground: #f1f5f9;
-  --card-bg: #1e293b;
-  --border-color: #334155;
-  --text-muted: #94a3b8;
-  --text-secondary: #cbd5e1;
-}
+/* Dark mode removed: only light theme variables are used. */
 
 body {
   background: var(--background);
@@ -43,61 +20,60 @@ body {
   line-height: 1.6;
 }
 
-/* Enhanced dark theme improvements */
-.dark {
-  color-scheme: dark;
+/* Dark mode overrides removed */
+
+/* Global slider styles (light + dark) */
+input[type="range"].slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 8px;
+  border-radius: 9999px;
+  background-color: #e5e7eb; /* gray-200 */
 }
 
-.dark .bg-white {
-  background-color: var(--card-bg) !important;
+/* Track */
+input[type="range"].slider::-webkit-slider-runnable-track {
+  height: 8px;
+  background-color: #e5e7eb; /* gray-200 */
+  border-radius: 9999px;
+}
+input[type="range"].slider::-moz-range-track {
+  height: 8px;
+  background-color: #e5e7eb; /* gray-200 */
+  border-radius: 9999px;
 }
 
-.dark .text-gray-700 {
-  color: var(--text-secondary) !important;
+/* Thumb */
+input[type="range"].slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 16px;
+  width: 16px;
+  border-radius: 50%;
+  background: #3b82f6; /* blue-500 */
+  cursor: pointer;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  margin-top: -4px; /* align with 8px track */
+}
+input[type="range"].slider::-moz-range-thumb {
+  height: 16px;
+  width: 16px;
+  border: none;
+  border-radius: 50%;
+  background: #3b82f6; /* blue-500 */
+  cursor: pointer;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
-.dark .text-gray-600 {
-  color: var(--text-muted) !important;
+/* Focus ring */
+input[type="range"].slider:focus {
+  outline: none;
+}
+input[type="range"].slider:focus::-webkit-slider-thumb {
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.25);
+}
+input[type="range"].slider:focus::-moz-range-thumb {
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.25);
 }
 
-.dark .text-gray-500 {
-  color: var(--text-muted) !important;
-}
-
-.dark .border-gray-200 {
-  border-color: var(--border-color) !important;
-}
-
-.dark .border-gray-300 {
-  border-color: var(--border-color) !important;
-}
-
-/* Improved button contrast */
-.dark button {
-  color: var(--foreground);
-}
-
-.dark .bg-gray-50 {
-  background-color: var(--card-bg) !important;
-}
-
-.dark .bg-gray-100 {
-  background-color: #334155 !important;
-}
-
-.dark .bg-gray-200 {
-  background-color: #475569 !important;
-}
-
-/* Better text contrast for dark theme */
-.dark .text-gray-400 {
-  color: #94a3b8 !important;
-}
-
-.dark .text-gray-300 {
-  color: #cbd5e1 !important;
-}
-
-.dark .text-gray-200 {
-  color: #e2e8f0 !important;
-}
+/* Dark mode range and utility remaps removed */

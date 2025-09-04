@@ -67,7 +67,7 @@ export default function ChatInput({
                     <button
                         type="button"
                         onClick={onCancelEdit}
-                        className="h-12 shrink-0 rounded-lg bg-gray-200 hover:bg-gray-300 px-4 text-sm font-semibold text-gray-700 border border-gray-300 transition-colors"
+                        className="h-12 shrink-0 rounded-lg bg-gray-200 hover:bg-gray-300 px-4 text-sm font-semibold text-gray-700 border border-gray-300 transition-colors dark:bg-gray-700 dark:hover:bg-gray-600 dark:text-gray-100 dark:border-gray-600"
                     >
                         ❌ Cancel
                     </button>

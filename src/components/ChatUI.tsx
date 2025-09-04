@@ -26,18 +26,21 @@ export default function ChatUI() {
 
     // RAG settings
     const [ragSettings, setRagSettings] = useState<RAGSettings>({
-        topK: 25, // Increased from 12 to 25 for better retrieval
+        topK: 10, // Increased from 12 to 25 for better retrieval
         similarityThreshold: 0.01, // Lowered from 0.05 to 0.01 for maximum retrieval
-        useSystemPrompt: true,
+        useSystemPrompt: false,
         customSystemPrompt: 'You are a helpful AI assistant. Answer questions based on the provided context and be concise.',
         showSystemPromptInput: false,
         showRagControls: true,
         showUnusedSources: false,
         showUsedSources: false,
-        hydeEnabled: true, // Enable HyDE for better semantic matching
+        hydeEnabled: false, // Enable HyDE for better semantic matching
         autoTuneEnabled: false,
         structuredStreamEnabled: false,
-        cragEnabled: false
+        cragEnabled: false,
+        hybridEnabled: false,
+        mmrEnabled: false,
+        crossEncoderEnabled: false
     });
 
     const [isEditingResend, setIsEditingResend] = useState<boolean>(false);
@@ -58,9 +61,16 @@ export default function ChatUI() {
         }
 
         const savedHyde = localStorage.getItem('hyde_enabled');
-        if (savedHyde) {
-            setRagSettings(prev => ({ ...prev, hydeEnabled: savedHyde === '1' }));
-        }
+        if (savedHyde) setRagSettings(prev => ({ ...prev, hydeEnabled: savedHyde === '1' }));
+
+        const savedHybrid = localStorage.getItem('hybrid_enabled');
+        if (savedHybrid) setRagSettings(prev => ({ ...prev, hybridEnabled: savedHybrid === '1' }));
+
+        const savedMmr = localStorage.getItem('mmr_enabled');
+        if (savedMmr) setRagSettings(prev => ({ ...prev, mmrEnabled: savedMmr === '1' }));
+
+        const savedCross = localStorage.getItem('cross_encoder_enabled');
+        if (savedCross) setRagSettings(prev => ({ ...prev, crossEncoderEnabled: savedCross === '1' }));
     }, []);
 
     const initializeChat = async () => {
@@ -75,11 +85,11 @@ export default function ChatUI() {
             try {
                 const client = getSupabase();
                 const table = (process.env.CHAT_SESSIONS_TABLE as string) || 'chat_sessions_ragbot';
-                await client.from(table).upsert({ 
-                    id: sessionId, 
-                    title: null, 
-                    created_at: new Date().toISOString(), 
-                    updated_at: new Date().toISOString() 
+                await client.from(table).upsert({
+                    id: sessionId,
+                    title: null,
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString()
                 }).select('id');
 
                 const { data: previousMessages, error } = await getSupabase()
@@ -170,6 +180,9 @@ export default function ChatUI() {
                 autoTuneEnabled: ragSettings.autoTuneEnabled,
                 structuredStreamEnabled: ragSettings.structuredStreamEnabled,
                 cragEnabled: ragSettings.cragEnabled,
+                hybridEnabled: ragSettings.hybridEnabled,
+                mmrEnabled: ragSettings.mmrEnabled,
+                crossEncoderEnabled: ragSettings.crossEncoderEnabled,
             };
 
             const controller = new AbortController();
@@ -315,12 +328,12 @@ export default function ChatUI() {
                 .order('updated_at', { ascending: false });
 
             if (!error && Array.isArray(data)) {
-                const list = data.map((row: any) => ({ 
-                    id: row.id, 
-                    title: row.title || 'New chat', 
-                    messageCount: 0, 
-                    lastMessage: '', 
-                    timestamp: row.updated_at || row.created_at || new Date().toISOString() 
+                const list = data.map((row: any) => ({
+                    id: row.id,
+                    title: row.title || 'New chat',
+                    messageCount: 0,
+                    lastMessage: '',
+                    timestamp: row.updated_at || row.created_at || new Date().toISOString()
                 }));
                 setChatSessions(list);
             }
@@ -405,7 +418,7 @@ export default function ChatUI() {
             structuredStreamEnabled: false,
             cragEnabled: false
         };
-        
+
         setRagSettings(defaultSettings);
         localStorage.setItem('similarity_threshold', '0.05');
         localStorage.setItem('custom_system_prompt', defaultSettings.customSystemPrompt);
@@ -451,26 +464,6 @@ export default function ChatUI() {
 
     return (
         <>
-            <style jsx>{`
-                .slider::-webkit-slider-thumb {
-                    appearance: none;
-                    height: 16px;
-                    width: 16px;
-                    border-radius: 50%;
-                    background: #3b82f6;
-                    cursor: pointer;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-                }
-                .slider::-moz-range-thumb {
-                    height: 16px;
-                    width: 16px;
-                    border-radius: 50%;
-                    background: #3b82f6;
-                    cursor: pointer;
-                    border: none;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-                }
-            `}</style>
             <div className="mx-auto w-full max-w-6xl">
                 {/* Hero Chatbox Section */}
                 <div className="mb-6">
@@ -502,6 +495,14 @@ export default function ChatUI() {
                                     setShowUnusedSources={(show) => setRagSettings(prev => ({ ...prev, showUnusedSources: show }))}
                                 />
                             )}
+                        />
+                    </div>
+                    {/* Quick Sample Questions near the chatbox for fast selection */}
+                    <div className="mt-3 px-2">
+                        <SampleQuestions
+                            isLoading={isLoading}
+                            onSendMessage={sendMessage}
+                            onSetInput={setLocalInput}
                         />
                     </div>
 
@@ -546,9 +547,9 @@ export default function ChatUI() {
                             try {
                                 const client = getSupabase();
                                 const table = (process.env.CHAT_SESSIONS_TABLE as string) || 'chat_sessions_ragbot';
-                                await client.from(table).update({ 
-                                    title: newTitle, 
-                                    updated_at: new Date().toISOString() 
+                                await client.from(table).update({
+                                    title: newTitle,
+                                    updated_at: new Date().toISOString()
                                 }).eq('id', sessionId);
                                 await loadChatSessions();
                             } catch (error) {
@@ -562,7 +563,7 @@ export default function ChatUI() {
                                 const table = (process.env.CHAT_SESSIONS_TABLE as string) || 'chat_sessions_ragbot';
                                 await client.from(table).delete().eq('id', sessionId);
                                 await loadChatSessions();
-                                
+
                                 if (sessionId === sessionId) {
                                     const newSessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
                                     setSessionId(newSessionId);
@@ -640,12 +641,6 @@ export default function ChatUI() {
                             settings={ragSettings}
                             onUpdateSettings={(updates) => setRagSettings(prev => ({ ...prev, ...updates }))}
                             onResetSettings={resetAllSettings}
-                        />
-
-                        <SampleQuestions
-                            isLoading={isLoading}
-                            onSendMessage={sendMessage}
-                            onSetInput={setLocalInput}
                         />
                     </div>
                 </div>

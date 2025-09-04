@@ -46,21 +46,21 @@ export default function MessageItem({
                 )}
 
                 {role === 'assistant' && ragParams && (
-                    <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-gray-600">
+                    <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-gray-600 dark:text-gray-300">
                         {typeof ragParams.topK === 'number' && (
-                            <span className="px-2 py-0.5 rounded bg-gray-100 border border-gray-200">Top-K: {ragParams.topK}</span>
+                            <span className="px-2 py-0.5 rounded bg-gray-100 border border-gray-200 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-200">Top-K: {ragParams.topK}</span>
                         )}
                         {typeof ragParams.threshold === 'number' && (
-                            <span className="px-2 py-0.5 rounded bg-gray-100 border border-gray-200">Thresh: {ragParams.threshold.toFixed(2)}</span>
+                            <span className="px-2 py-0.5 rounded bg-gray-100 border border-gray-200 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-200">Thresh: {ragParams.threshold.toFixed(2)}</span>
                         )}
                         {ragParams.hydeEnabled && (
-                            <span className="px-2 py-0.5 rounded bg-indigo-100 border border-indigo-200 text-indigo-700">HyDE</span>
+                            <span className="px-2 py-0.5 rounded bg-indigo-100 border border-indigo-200 text-indigo-700 dark:bg-indigo-900/30 dark:border-indigo-800/50 dark:text-indigo-200">HyDE</span>
                         )}
                         {ragParams.auto && (
-                            <span className="px-2 py-0.5 rounded bg-emerald-100 border border-emerald-200 text-emerald-700">Auto</span>
+                            <span className="px-2 py-0.5 rounded bg-emerald-100 border border-emerald-200 text-emerald-700 dark:bg-emerald-900/30 dark:border-emerald-800/50 dark:text-emerald-200">Auto</span>
                         )}
                         {ragParams.crag && (
-                            <span className="px-2 py-0.5 rounded bg-rose-100 border border-rose-200 text-rose-700">CRAG</span>
+                            <span className="px-2 py-0.5 rounded bg-rose-100 border border-rose-200 text-rose-700 dark:bg-rose-900/30 dark:border-rose-800/50 dark:text-rose-200">CRAG</span>
                         )}
                     </div>
                 )}

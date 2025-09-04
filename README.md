@@ -241,6 +241,33 @@ This chatbot is optimized for **Cosine similarity** as reported by Qdrant (highe
   - **Broader**: 0.01–0.03 (higher recall)
   - **Very Flexible**: Use 0.01 for maximum recall
 
+## ⚙️ Retrieval Optimization (Advanced)
+
+We provide an aggressive-yet-safe retrieval optimization pipeline to keep context precise and reduce citation-heavy noise. Highlights:
+
+- Tightened dynamic filter: keep candidates within 85% of the top combined score.
+- Cosine score floor: `max(user threshold, 0.10)` to drop weak vector hits.
+- Reference penalty: increased to reduce citation/reference-only passages.
+- Metadata/title boost: small boost for chapter/section/title keyword overlap.
+- Acronym-aware boost: exact uppercase query tokens (e.g., `ILD`, `SBRT`) get a small boost when present in text.
+- Context cap: use at most 10 sources in the final prompt to avoid flooding the LLM.
+
+Recommended toggle presets:
+- Hybrid ON, MMR ON, Cross-encoder ON → highest precision (slower).
+- Hybrid ON only → balanced.
+- All OFF → baseline.
+
+Suggested UI settings:
+- Similarity Threshold: 0.08–0.12 (start 0.10 if noisy, 0.08 if thin).
+- Top-K: 10–12 (backend caps context to ~10).
+
+Interpreting logs (server console):
+- `Dynamic filter: topCombined=..., rel>=..., cosineFloor>=..., minKw=... Kept X/Y`
+- `Post-rerank counts — optimized: A, passing dynamic filter: B, diversified: C, finalUsed: D (cap=...)`
+- Optional: `Applied MMR selection, count: ...` and `Applied cross-encoder reranking to ... items`
+
+For a deeper dive, see [`docs/RETRIEVAL_OPTIMIZATION.md`](./docs/RETRIEVAL_OPTIMIZATION.md).
+
 ## 🛠️ Troubleshooting
 
 ### No RAG Results
@@ -349,6 +376,11 @@ node setup-qdrant-cloud.js
 - **HyDE & Auto**: Toggle hypothetical retrieval and auto-tuned parameters
 - **Cosine Threshold**: 0.01–0.1 range with presets (0.01/0.05/0.1) - optimized for better precision
 - **Structured Streaming (JSONL)**: Robust incremental streaming and citations
+
+### Retrieval Optimization Updates
+- Increased reference penalty and added acronym-aware + metadata/title boosts for better precision
+- Raised cosine floor to 0.10 and added relative cutoff at 85% of top combined score
+- Context capped to 10 sources to avoid prompt bloat
 
 ## 🛡️ Operations
 

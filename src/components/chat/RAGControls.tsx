@@ -23,6 +23,21 @@ export default function RAGControls({ settings, onUpdateSettings, onResetSetting
         localStorage.setItem('hyde_enabled', enabled ? '1' : '0');
     };
 
+    const updateHybridEnabled = (enabled: boolean) => {
+        onUpdateSettings({ hybridEnabled: enabled });
+        localStorage.setItem('hybrid_enabled', enabled ? '1' : '0');
+    };
+
+    const updateMmrEnabled = (enabled: boolean) => {
+        onUpdateSettings({ mmrEnabled: enabled });
+        localStorage.setItem('mmr_enabled', enabled ? '1' : '0');
+    };
+
+    const updateCrossEncoderEnabled = (enabled: boolean) => {
+        onUpdateSettings({ crossEncoderEnabled: enabled });
+        localStorage.setItem('cross_encoder_enabled', enabled ? '1' : '0');
+    };
+
     return (
         <div className="p-6 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-purple-50 dark:from-gray-900 dark:to-gray-800">
             <div className="flex items-start justify-between mb-4">
@@ -220,6 +235,119 @@ export default function RAGControls({ settings, onUpdateSettings, onResetSetting
                         </div>
                     </div>
 
+                    {/* Experiments Section */}
+                    <div className="border-b border-gray-200 dark:border-gray-700 pb-4">
+                        <div className="flex items-center gap-3 mb-6">
+                            <h3 className="text-base font-semibold text-gray-800 dark:text-gray-200">EXPERIMENTS</h3>
+                        </div>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                            {/* Hybrid Search */}
+                            <div className="bg-white dark:bg-gray-800 p-6 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
+                                <div className="space-y-4">
+                                    <div className="flex items-center justify-between">
+                                        <label className="text-sm font-semibold text-gray-800 dark:text-gray-200">
+                                            Hybrid Search (Dense + BM25-like)
+                                        </label>
+                                        <span className={`px-3 py-1 rounded-full text-sm font-medium ${settings.hybridEnabled
+                                            ? 'bg-teal-100 text-teal-700 dark:bg-teal-900/20 dark:text-teal-300'
+                                            : 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'
+                                            }`}>
+                                            {settings.hybridEnabled ? 'Enabled' : 'Disabled'}
+                                        </span>
+                                    </div>
+                                    <div className="p-3 bg-teal-50 dark:bg-teal-900/20 rounded-lg border border-teal-200 dark:border-teal-800">
+                                        <p className="text-sm text-teal-800 dark:text-teal-300">
+                                            Combines cosine similarity with a keyword-based score to improve matching for proper nouns and abbreviations.
+                                        </p>
+                                    </div>
+                                    <div className="flex items-center justify-center">
+                                        <button
+                                            onClick={() => updateHybridEnabled(!settings.hybridEnabled)}
+                                            className={`relative inline-flex h-8 w-14 items-center rounded-full transition-colors ${settings.hybridEnabled ? 'bg-teal-600' : 'bg-gray-200 dark:bg-gray-700'
+                                                }`}
+                                            title="Combine dense and keyword scoring"
+                                        >
+                                            <span
+                                                className={`inline-block h-6 w-6 transform rounded-full bg-white transition-transform ${settings.hybridEnabled ? 'translate-x-7' : 'translate-x-1'
+                                                    }`}
+                                            />
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* MMR Diversification */}
+                            <div className="bg-white dark:bg-gray-800 p-6 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
+                                <div className="space-y-4">
+                                    <div className="flex items-center justify-between">
+                                        <label className="text-sm font-semibold text-gray-800 dark:text-gray-200">
+                                            MMR Diversification
+                                        </label>
+                                        <span className={`px-3 py-1 rounded-full text-sm font-medium ${settings.mmrEnabled
+                                            ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/20 dark:text-orange-300'
+                                            : 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'
+                                            }`}>
+                                            {settings.mmrEnabled ? 'Enabled' : 'Disabled'}
+                                        </span>
+                                    </div>
+                                    <div className="p-3 bg-orange-50 dark:bg-orange-900/20 rounded-lg border border-orange-200 dark:border-orange-800">
+                                        <p className="text-sm text-orange-800 dark:text-orange-300">
+                                            Selects a diverse set of results to reduce redundancy. Useful when many chunks come from the same section.
+                                        </p>
+                                    </div>
+                                    <div className="flex items-center justify-center">
+                                        <button
+                                            onClick={() => updateMmrEnabled(!settings.mmrEnabled)}
+                                            className={`relative inline-flex h-8 w-14 items-center rounded-full transition-colors ${settings.mmrEnabled ? 'bg-orange-600' : 'bg-gray-200 dark:bg-gray-700'
+                                                }`}
+                                            title="Maximal Marginal Relevance selection"
+                                        >
+                                            <span
+                                                className={`inline-block h-6 w-6 transform rounded-full bg-white transition-transform ${settings.mmrEnabled ? 'translate-x-7' : 'translate-x-1'
+                                                    }`}
+                                            />
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Cross-encoder Reranking */}
+                            <div className="bg-white dark:bg-gray-800 p-6 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
+                                <div className="space-y-4">
+                                    <div className="flex items-center justify-between">
+                                        <label className="text-sm font-semibold text-gray-800 dark:text-gray-200">
+                                            Cross-encoder Rerank
+                                        </label>
+                                        <span className={`px-3 py-1 rounded-full text-sm font-medium ${settings.crossEncoderEnabled
+                                            ? 'bg-pink-100 text-pink-700 dark:bg-pink-900/20 dark:text-pink-300'
+                                            : 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'
+                                            }`}>
+                                            {settings.crossEncoderEnabled ? 'Enabled' : 'Disabled'}
+                                        </span>
+                                    </div>
+                                    <div className="p-3 bg-pink-50 dark:bg-pink-900/20 rounded-lg border border-pink-200 dark:border-pink-800">
+                                        <p className="text-sm text-pink-800 dark:text-pink-300">
+                                            Reranks the top candidates using an LLM-based relevance score for sharper precision. Adds latency and token cost.
+                                        </p>
+                                    </div>
+                                    <div className="flex items-center justify-center">
+                                        <button
+                                            onClick={() => updateCrossEncoderEnabled(!settings.crossEncoderEnabled)}
+                                            className={`relative inline-flex h-8 w-14 items-center rounded-full transition-colors ${settings.crossEncoderEnabled ? 'bg-pink-600' : 'bg-gray-200 dark:bg-gray-700'
+                                                }`}
+                                            title="Rerank with LLM-based scoring"
+                                        >
+                                            <span
+                                                className={`inline-block h-6 w-6 transform rounded-full bg-white transition-transform ${settings.crossEncoderEnabled ? 'translate-x-7' : 'translate-x-1'
+                                                    }`}
+                                            />
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                     {/* System Prompt Section */}
                     <div className="border-b border-gray-200 dark:border-gray-700 pb-4">
                         <div className="flex items-center gap-3 mb-6">

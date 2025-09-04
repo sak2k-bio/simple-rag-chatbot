@@ -87,7 +87,7 @@ export async function POST(req: NextRequest) {
             hasQdrantCollection: !!process.env.QDRANT_COLLECTION
         });
 
-        const { messages, topK, similarityThreshold, useSystemPrompt, systemPrompt: customSystemPrompt, hydeEnabled, autoTuneEnabled, structuredStreamEnabled, cragEnabled } = (await req.json()) as {
+        const { messages, topK, similarityThreshold, useSystemPrompt, systemPrompt: customSystemPrompt, hydeEnabled, autoTuneEnabled, structuredStreamEnabled, cragEnabled, hybridEnabled, mmrEnabled, crossEncoderEnabled } = (await req.json()) as {
             messages: Array<{ role: 'user' | 'assistant'; content: string }>;
             topK?: number;
             similarityThreshold?: number;
@@ -97,10 +97,13 @@ export async function POST(req: NextRequest) {
             autoTuneEnabled?: boolean;
             structuredStreamEnabled?: boolean;
             cragEnabled?: boolean;
+            hybridEnabled?: boolean;
+            mmrEnabled?: boolean;
+            crossEncoderEnabled?: boolean;
         };
 
         console.log('Messages received:', messages);
-        console.log('Parameters:', { topK, similarityThreshold, useSystemPrompt, customSystemPrompt });
+        console.log('Parameters:', { topK, similarityThreshold, useSystemPrompt, customSystemPrompt, hybridEnabled, mmrEnabled, crossEncoderEnabled });
 
         if (!messages || messages.length === 0) {
             return new Response('No messages provided', { status: 400, headers: buildCorsHeaders(origin) });
@@ -180,12 +183,16 @@ export async function POST(req: NextRequest) {
                             const hydeHits = await searchQdrant(hydeVector, {
                                 collection: process.env.QDRANT_COLLECTION,
                                 limit: finalTopK * 2,
+                                scoreThreshold: Math.max(finalThreshold, 0.08),
+                                withVectors: mmrEnabled === true,
                             });
                             console.log(`HyDE search returned ${hydeHits.length} hits`);
 
                             const userHits = await searchQdrant(userVector, {
                                 collection: process.env.QDRANT_COLLECTION,
                                 limit: finalTopK,
+                                scoreThreshold: Math.max(finalThreshold, 0.08),
+                                withVectors: mmrEnabled === true,
                             });
                             console.log(`User-query search returned ${userHits.length} hits`);
 
@@ -195,6 +202,8 @@ export async function POST(req: NextRequest) {
                             allHits = await searchQdrant(userVector, {
                                 collection: process.env.QDRANT_COLLECTION,
                                 limit: finalTopK * 2,
+                                scoreThreshold: Math.max(finalThreshold, 0.08),
+                                withVectors: mmrEnabled === true,
                             });
                         }
                     } catch (hydeError) {
@@ -202,6 +211,8 @@ export async function POST(req: NextRequest) {
                         allHits = await searchQdrant(userVector, {
                             collection: process.env.QDRANT_COLLECTION,
                             limit: finalTopK * 2,
+                            scoreThreshold: Math.max(finalThreshold, 0.08),
+                            withVectors: mmrEnabled === true,
                         });
                     }
                 } else {
@@ -209,10 +220,218 @@ export async function POST(req: NextRequest) {
                     allHits = await searchQdrant(userVector, {
                         collection: process.env.QDRANT_COLLECTION,
                         limit: finalTopK * 2,
+                        scoreThreshold: Math.max(finalThreshold, 0.08),
+                        withVectors: mmrEnabled === true,
                     });
                 }
 
                 console.log(`Retrieved ${allHits.length} total sources with scores:`, allHits.map(h => h.score));
+
+                // 1) Filter to only optimized chunks to avoid mixed-model/older embeddings
+                const preFilterCount = allHits.length;
+                allHits = allHits.filter(h => {
+                    const p = h?.payload || {};
+                    return p.optimized === true || p?.metadata?.optimized === true;
+                });
+                if (preFilterCount !== allHits.length) {
+                    console.log(`Filtered non-optimized chunks: ${preFilterCount} -> ${allHits.length}`);
+                }
+
+                // 2) Heuristic re-ranking to penalize reference sections and boost keyword overlap (hybrid)
+                const queryText = retrievalQuery || userMessage;
+                const queryTerms = (queryText || '')
+                    .toLowerCase()
+                    .replace(/[^a-z0-9\s]/g, ' ')
+                    .split(/\s+/)
+                    .filter(t => t.length > 2);
+                // Detect potential acronyms/proper nouns from raw query (upper-case tokens)
+                const rawTokens = (queryText || '').split(/\s+/).filter(Boolean);
+                const acronyms = rawTokens.filter(t => /^(?:[A-Z]{2,5}|[A-Z]{2,}[0-9]*)$/.test(t));
+
+                function keywordOverlapScore(text: string): number {
+                    if (!text) return 0;
+                    const lower = text.toLowerCase();
+                    let hits = 0;
+                    for (const t of queryTerms) {
+                        if (lower.includes(t)) hits++;
+                    }
+                    return hits / Math.max(1, queryTerms.length);
+                }
+
+                // Simple BM25-like keyword scoring leveraging term frequencies and length normalization
+                function bm25ishScore(text: string): number {
+                    if (!text) return 0;
+                    const tokens = text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
+                    if (tokens.length === 0) return 0;
+                    const tf: Record<string, number> = {};
+                    for (const tok of tokens) tf[tok] = (tf[tok] || 0) + 1;
+                    let sum = 0;
+                    for (const q of queryTerms) {
+                        const f = tf[q] || 0;
+                        if (f > 0) sum += Math.log(1 + f);
+                    }
+                    // Length norm prefers concise chunks
+                    const lengthNorm = 1 + (tokens.length / 500);
+                    return sum / lengthNorm;
+                }
+
+                function referencesPenalty(text: string): number {
+                    if (!text) return 0;
+                    // Penalize citation-heavy content
+                    const patterns = [
+                        /et\s+al\./gi,
+                        /\b(JAMA|Chest\.|N\s?Engl\s?J\s?Med|Lancet|Radiol\.|Am\sJ\sRespir|Thorax)\b/gi,
+                        /\b(19|20)\d{2}\b/g,
+                        /\d+\s*\./g // numbered lists typical of references
+                    ];
+                    let count = 0;
+                    for (const p of patterns) {
+                        const m = text.match(p);
+                        if (m) count += m.length;
+                    }
+                    // Map count to [0,1] with diminishing returns
+                    return Math.min(1, count / 8); // Increased reference penalty
+                }
+
+                const reranked = allHits.map(h => {
+                    const t = (h?.payload?.text as string)
+                        || (h?.payload?.content as string)
+                        || (h?.payload?.pageContent as string)
+                        || '';
+                    const kw = keywordOverlapScore(t);
+                    const bm25 = hybridEnabled ? bm25ishScore(t) : 0;
+                    const pen = referencesPenalty(t);
+                    const metaTitle = ((h?.payload?.metadata?.title as string) || (h?.payload?.title as string) || (h?.payload?.metadata?.section as string) || '').toString();
+                    const metaBoost = metaTitle ? (keywordOverlapScore(metaTitle) * 0.25) : 0;
+                    // If query includes acronyms and the text contains them exactly, add a small boost
+                    const acronymBoost = acronyms.some(a => t.includes(a)) ? 0.10 : 0;
+                    // Weighted combination
+                    // If hybrid is enabled, give more weight to keyword/BM25 terms
+                    const combined = (hybridEnabled ? 0.65 : 0.75) * h.score
+                        + (hybridEnabled ? 0.35 : 0.18) * kw
+                        + (hybridEnabled ? 0.20 : 0.00) * bm25
+                        + metaBoost
+                        + acronymBoost
+                        - 0.35 * pen; // increase reference penalty
+                    return { ...h, _kw: kw, _bm25: bm25, _pen: pen, _metaBoost: metaBoost, _acr: acronymBoost, _combined: combined } as any;
+                })
+                .sort((a, b) => (b._combined ?? 0) - (a._combined ?? 0));
+
+                // 3) Dynamic threshold relative to the best candidate to drop the tail
+                const topCombined = reranked.length ? (reranked[0]._combined ?? 0) : 0;
+                const absoluteThreshold = finalThreshold; // user/system provided absolute threshold (cosine)
+                const relativeThreshold = topCombined * 0.85; // keep items within 85% of best combined score (tighter)
+                const cosineFloor = Math.max(absoluteThreshold, 0.10); // cut the tail of weak cosine matches (raised)
+                const minKwOverlap = hybridEnabled ? 0.15 : 0.05; // require some lexical grounding, more when hybrid
+
+                // Keep items that either have decent vector score or survive combined cutoff AND meet min keyword overlap
+                let filteredByDynamic = reranked.filter(h => {
+                    const keepByCosine = h.score >= cosineFloor;
+                    const keepByCombined = h._combined >= relativeThreshold;
+                    const keepByKw = (h._kw ?? 0) >= minKwOverlap;
+                    return (keepByCosine || keepByCombined) && keepByKw;
+                });
+                console.log(`Dynamic filter: topCombined=${topCombined.toFixed(4)}, rel>=${relativeThreshold.toFixed(4)}, cosineFloor>=${cosineFloor.toFixed(4)}, minKw>=${minKwOverlap}. Kept ${filteredByDynamic.length}/${reranked.length}`);
+
+                // Optional cross-encoder-like reranking using LLM to score relevance of top candidates
+                if (crossEncoderEnabled && filteredByDynamic.length > 0) {
+                    try {
+                        const maxCe = Math.min(50, filteredByDynamic.length);
+                        const sample = filteredByDynamic.slice(0, maxCe);
+                        const cePrompt = `You are a ranking model. Given a query and a list of snippets, assign each snippet a relevance score from 0.0 to 1.0. Output a compact JSON array of objects: [{"id": <index>, "score": <0..1>}]. Do not include any text before or after the JSON.\n\nQuery: ${queryText}\n\nSnippets:\n` + sample.map((h, i) => {
+                            const text = ((h?.payload?.text as string) || (h?.payload?.content as string) || (h?.payload?.pageContent as string) || '').slice(0, 800);
+                            return `#${i}: ${text}`;
+                        }).join('\n');
+                        const ceRes = await generateText({ model: google('gemini-1.5-flash'), prompt: cePrompt });
+                        const ceText = (ceRes.text || '').trim();
+                        let scores: Array<{ id: number; score: number }> = [];
+                        try { scores = JSON.parse(ceText); } catch {}
+                        if (Array.isArray(scores) && scores.length > 0) {
+                            const map = new Map<number, number>();
+                            for (const s of scores) if (typeof s?.id === 'number' && typeof s?.score === 'number') map.set(s.id, s.score);
+                            filteredByDynamic = sample
+                                .map((h, i) => ({ ...h, _ce: map.get(i) ?? 0 }))
+                                .sort((a, b) => (b._ce ?? 0) - (a._ce ?? 0))
+                                .concat(filteredByDynamic.slice(maxCe));
+                            console.log('Applied cross-encoder reranking to', maxCe, 'items');
+                        }
+                    } catch (e) {
+                        console.warn('Cross-encoder rerank failed; continuing with vector ranking');
+                    }
+                }
+
+                // 4) Optional MMR selection using candidate vectors
+                function cosineSim(a: number[], b: number[]): number {
+                    let dot = 0, na = 0, nb = 0;
+                    const n = Math.min(a.length, b.length);
+                    for (let i = 0; i < n; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+                    if (na === 0 || nb === 0) return 0;
+                    return dot / (Math.sqrt(na) * Math.sqrt(nb));
+                }
+
+                let diversified: any[] = [];
+                if (mmrEnabled) {
+                    // Ensure vectors exist on candidates
+                    const candidatesWithVec = filteredByDynamic.filter(h => (h as any).vector && Array.isArray((h as any).vector));
+                    if (candidatesWithVec.length >= 2) {
+                        const lambda = 0.7; // trade-off relevance vs diversity
+                        const selected: any[] = [];
+                        const remaining = [...candidatesWithVec];
+                        while (selected.length < finalTopK && remaining.length > 0) {
+                            let bestIdx = 0; let bestScore = -Infinity;
+                            for (let i = 0; i < remaining.length; i++) {
+                                const h = remaining[i];
+                                const simToQuery = cosineSim((h as any).vector as number[], userVector as number[]);
+                                let maxSimToSelected = 0;
+                                for (const s of selected) {
+                                    const sim = cosineSim(((h as any).vector as number[]), ((s as any).vector as number[]));
+                                    if (sim > maxSimToSelected) maxSimToSelected = sim;
+                                }
+                                const mmrScore = lambda * simToQuery - (1 - lambda) * maxSimToSelected;
+                                if (mmrScore > bestScore) { bestScore = mmrScore; bestIdx = i; }
+                            }
+                            selected.push(remaining.splice(bestIdx, 1)[0]);
+                        }
+                        diversified = selected;
+                        // Fill from any leftover (without vectors) if needed
+                        if (diversified.length < finalTopK) {
+                            for (const h of filteredByDynamic) {
+                                if (diversified.length >= finalTopK) break;
+                                if (!diversified.includes(h)) diversified.push(h);
+                            }
+                        }
+                        console.log('Applied MMR selection, count:', diversified.length);
+                    }
+                }
+
+                if (diversified.length === 0) {
+                    // Fallback: Enforce source diversity: limit to 1 per source initially, then fill up to Top-K
+                    const bySource = new Map<string, any[]>();
+                    for (const h of filteredByDynamic) {
+                        const src = (h?.payload?.metadata?.source as string) || (h?.payload?.source as string) || 'Unknown';
+                        if (!bySource.has(src)) bySource.set(src, []);
+                        bySource.get(src)!.push(h);
+                    }
+                    // First pass: take top 1 per source
+                    for (const [_, arr] of bySource) {
+                        arr.sort((a, b) => (b._combined ?? 0) - (a._combined ?? 0));
+                        diversified.push(arr[0]);
+                    }
+                    // If we still have room, fill with remaining best
+                    if (diversified.length < finalTopK) {
+                        const rest = ([] as any[]).concat(...Array.from(bySource.values()).map(a => a.slice(1)));
+                        rest.sort((a, b) => (b._combined ?? 0) - (a._combined ?? 0));
+                        for (const h of rest) {
+                            if (diversified.length >= finalTopK) break;
+                            diversified.push(h);
+                        }
+                    }
+                }
+
+                // Trim to Top-K window used downstream and cap context size to avoid flooding the LLM
+                const maxContextSources = Math.max(8, Math.min(10, finalTopK));
+                const finalHits = diversified.slice(0, maxContextSources);
+                console.log(`Post-rerank counts — optimized: ${allHits.length}, passing dynamic filter: ${filteredByDynamic.length}, diversified: ${diversified.length}, finalUsed: ${finalHits.length} (cap=${maxContextSources})`);
 
                 // If CRAG enabled, judge and possibly refine and re-retrieve
                 if (cragEnabled && allHits.length > 0) {
@@ -251,10 +470,9 @@ export async function POST(req: NextRequest) {
                     }
                 }
 
-                // Then filter by threshold for context generation
-                // Cosine similarity: higher is better; keep scores >= threshold
-                const filteredHits = allHits.filter(h => h.score >= finalThreshold);
-                console.log(`Filtered to ${filteredHits.length} sources at or above threshold ${finalThreshold}`);
+                // Then filter by threshold for context generation (use finalHits)
+                const filteredHits = finalHits;
+                console.log(`Filtered to ${filteredHits.length} sources at or above dynamic thresholding (abs=${finalThreshold}, rel≈${(topCombined*0.55).toFixed(3)})`);
 
                 // Extract context from filtered sources (used for AI response)
                 const contextSources = filteredHits.map((h) => {

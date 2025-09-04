@@ -43,4 +43,7 @@ export interface RAGSettings {
     autoTuneEnabled: boolean;
     structuredStreamEnabled: boolean;
     cragEnabled: boolean;
+    hybridEnabled?: boolean;
+    mmrEnabled?: boolean;
+    crossEncoderEnabled?: boolean;
 }

@@ -319,6 +319,7 @@
                 grid-template-columns: 1fr;
             }
         }
+        /* Dark mode removed in this UI */
     </style>
 </head>
 <body>
@@ -329,6 +330,7 @@
             <div id="loadingIndicator" style="display: none; color: #666; font-size: 14px;">
                 ⏳ Loading...
             </div>
+            <div style="margin-top:12px;"></div>
         </div>
 
         <div class="grid">
@@ -430,6 +432,8 @@
     </div>
 
     <script>
+        // Dark mode removed: no theme initialization
+
         let currentProcessId = null;
         let statusInterval = null;
 
@@ -444,6 +448,8 @@
                 }
                 
                 setupFileUpload();
+
+                // Dark mode toggle removed
                 
                 // Check Ollama status after a short delay to avoid blocking page load
                 setTimeout(() => {
