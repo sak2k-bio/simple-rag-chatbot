@@ -34,7 +34,7 @@ async function getPRetry() {
 }
 const Database = require('better-sqlite3');
 const { QdrantClient } = require('@qdrant/js-client-rest');
-const { google } = require('@ai-sdk/google');
+const { createGoogleGenerativeAI } = require('@ai-sdk/google');
 const { embed } = require('ai');
 const axios = require('axios');
 
@@ -52,7 +52,14 @@ const {
   BULK_EMBED_BATCH = '50',
   BULK_UPSERT_BATCH = '200',
   OPTIMAL_CHUNK_SIZE = '1000',
-  OPTIMAL_CHUNK_OVERLAP = '200'
+  OPTIMAL_CHUNK_OVERLAP = '200',
+  // Medical textbook specific chunking controls
+  MED_HEADING_AWARE = 'true',
+  MED_MAX_SECTION_LEAD = '300',
+  MED_LIST_MERGE = 'true',
+  MED_TABLE_DETECT = 'true',
+  MED_MIN_CHUNK_SIZE_FACTOR = '0.5',
+  MED_MAX_CHUNK_SIZE_FACTOR = '1.3'
 } = process.env;
 
 // Resolve Google API key (support both legacy and new env var names)
@@ -77,6 +84,12 @@ const embedBatchSize = Number(BULK_EMBED_BATCH);
 const upsertBatchSize = Number(BULK_UPSERT_BATCH);
 const chunkSize = Number(OPTIMAL_CHUNK_SIZE);
 const chunkOverlap = Number(OPTIMAL_CHUNK_OVERLAP);
+const headingAware = String(MED_HEADING_AWARE).toLowerCase() === 'true';
+const maxSectionLead = Number(MED_MAX_SECTION_LEAD);
+const listMerge = String(MED_LIST_MERGE).toLowerCase() === 'true';
+const tableDetect = String(MED_TABLE_DETECT).toLowerCase() === 'true';
+const minChunkFactor = Number(MED_MIN_CHUNK_SIZE_FACTOR);
+const maxChunkFactor = Number(MED_MAX_CHUNK_SIZE_FACTOR);
 
 // Initialize clients
 const client = new QdrantClient({
@@ -88,8 +101,9 @@ const client = new QdrantClient({
 const collectionName = QDRANT_COLLECTION;
 let expectedVectorSize = null; // determined in ensureCollection
 // Initialize Google provider explicitly with API key to avoid env name mismatches
-const googleProvider = RESOLVED_GOOGLE_API_KEY ? google({ apiKey: RESOLVED_GOOGLE_API_KEY }) : null;
-const embeddingModel = EMBEDDING_PROVIDER === 'ollama' ? null : googleProvider.embedding('text-embedding-004');
+const googleProvider = RESOLVED_GOOGLE_API_KEY ? createGoogleGenerativeAI({ apiKey: RESOLVED_GOOGLE_API_KEY }) : null;
+// For Google embeddings, obtain the embedding model from the provider
+const embeddingModel = EMBEDDING_PROVIDER === 'ollama' ? null : googleProvider?.textEmbeddingModel('gemini-embedding-001');
 
 // Initialize database for manifest
 const db = new Database('bulk_manifest_optimized.db');
@@ -172,57 +186,108 @@ function normalizeText(raw) {
   return t.trim();
 }
 
-// Enhanced chunking with sentence and paragraph awareness
-function findOptimalChunkBoundaries(rawText, targetSize = 1000, overlap = 200) {
-  const minSize = Math.floor(targetSize * 0.5); // ensure chunks aren't too tiny
-  const maxSize = Math.floor(targetSize * 1.3);
+// Enhanced chunking with sentence, paragraph, and medical heading awareness
+function findOptimalChunkBoundaries(rawText, targetSize = 1000, overlap = 200, options = {}) {
+  const minSize = Math.floor(targetSize * (options.minFactor ?? minChunkFactor));
+  const maxSize = Math.floor(targetSize * (options.maxFactor ?? maxChunkFactor));
 
   const text = normalizeText(rawText);
 
-  // Split into paragraphs first to keep structure
+  // Split into paragraphs to keep structure
   const paragraphs = text.split(/\n\n+/);
+
+  // Heading detection heuristics (for medical textbooks)
+  const isHeadingLine = (p) => {
+    if (!headingAware) return false;
+    const trimmed = p.trim();
+    if (trimmed.length === 0) return false;
+    if (trimmed.length > 120) return false; // too long for a heading
+    // CHAPTER, PART, SECTION prefixes
+    if (/^(CHAPTER|PART|SECTION)\b[\s\d\.:\-A-Z_]*/i.test(trimmed)) return true;
+    // All caps words (allow numbers and basic punctuation)
+    if (/^[A-Z0-9 ,:\-()\/]+$/.test(trimmed) && /[A-Z]{3,}/.test(trimmed)) return true;
+    // Title Case short phrases ending with no period
+    if (/^[A-Z][a-z]+(?:[\s-][A-Z][a-z]+){0,6}$/.test(trimmed) && !/[.!?]$/.test(trimmed)) return true;
+    return false;
+  };
 
   // Sentence splitter: split on punctuation followed by space and capital/quote/number
   const splitSentences = (p) => p
     .split(/(?<=[.!?])\s+(?=(?:[A-Z"'\(\[]|\d))/)
     .filter(s => s && s.trim().length > 0);
 
-  const sentences = paragraphs.flatMap(splitSentences);
+  // List bullet detection
+  const isListSentence = (s) => /^(?:[-•·\u2022\u25E6\u2043]|\d+\.|[a-z]\))\s/.test(s.trim());
+
+  // Table-like block detection (pipes, multiple columns spacing, tabs)
+  const isTabley = (s) => /\|[^\n]+\|/.test(s) || /\t/.test(s) || /\s{2,}\S+\s{2,}\S+/.test(s);
+
+  const sentencesByPara = paragraphs.map(splitSentences);
 
   const chunks = [];
   let current = '';
+  let currentHeading = '';
   let cursor = 0; // position in normalized text for start offsets
 
   const pushChunk = (content) => {
+    const contentWithLead = currentHeading && content.length < maxSectionLead
+      ? `${currentHeading}: ${content}`
+      : content;
     const startIdx = text.indexOf(content, cursor);
     const start = startIdx === -1 ? cursor : startIdx;
     const end = start + content.length;
-    chunks.push({ text: content, start, end, length: content.length });
-    cursor = end - Math.min(overlap, Math.floor(content.length * 0.2)); // coarse offset tracking
+    chunks.push({ text: contentWithLead, start, end, length: contentWithLead.length, heading: currentHeading || null });
+    cursor = end - Math.min(overlap, Math.floor(contentWithLead.length * 0.2));
   };
 
-  for (let i = 0; i < sentences.length; i++) {
-    const s = sentences[i].trim();
-    if (!s) continue;
+  for (let pIdx = 0; pIdx < sentencesByPara.length; pIdx++) {
+    const paraText = paragraphs[pIdx];
+    const sentences = sentencesByPara[pIdx];
 
-    if (current.length === 0) {
-      current = s;
-      continue;
+    // Detect heading paragraph boundaries
+    if (isHeadingLine(paraText)) {
+      // flush existing chunk if it has content
+      if (current.trim().length >= minSize * 0.5) {
+        pushChunk(current.trim());
+        current = '';
+      }
+      currentHeading = paraText.trim();
+      continue; // do not include pure heading as standalone content
     }
 
-    if ((current.length + 1 + s.length) <= maxSize) {
-      current += ' ' + s;
-    } else {
-      // If current is too small, try to add until minSize
-      if (current.length < minSize) {
-        current += ' ' + s;
+    // Build chunk from sentences while respecting lists/tables
+    for (let i = 0; i < sentences.length; i++) {
+      let s = sentences[i].trim();
+      if (!s) continue;
+
+      // If this looks like a table block, try to keep it atomic
+      const treatAtomic = tableDetect && isTabley(s);
+
+      if (current.length === 0) {
+        current = s;
+        // If first sentence is list/table and heading exists, allow larger chunk around it
         continue;
       }
-      // finalize current
-      pushChunk(current);
-      // start new with overlap by appending last sentence of previous chunk if helpful
-      const tail = current.split(/(?<=[.!?])\s+/).slice(-1)[0] || '';
-      current = tail.length > 0 && tail.length < overlap ? tail + ' ' + s : s;
+
+      const canAppend = (current.length + 1 + s.length) <= maxSize || (listMerge && (isListSentence(s) || isListSentence(current)));
+
+      if (canAppend && !treatAtomic) {
+        current += ' ' + s;
+      } else {
+        if (current.length < minSize) {
+          // Try to add until reach minSize unless atomic table forces boundary
+          if (!treatAtomic) {
+            current += ' ' + s;
+            continue;
+          }
+        }
+        // finalize current
+        pushChunk(current);
+        // Start new chunk. To preserve cohesion with lists, optionally carry last bullet if short
+        const tail = current.split(/(?<=[.!?])\s+/).slice(-1)[0] || '';
+        const carry = tail.length > 0 && tail.length < overlap ? tail + ' ' : '';
+        current = carry + s;
+      }
     }
   }
 
@@ -234,21 +299,19 @@ function findOptimalChunkBoundaries(rawText, targetSize = 1000, overlap = 200) {
   let i = 0;
   while (i < chunks.length) {
     if (chunks[i].length < minSize) {
-      if (i + 1 < chunks.length) {
-        // Merge with next chunk
+      if (i + 1 < chunks.length && chunks[i].heading === chunks[i + 1].heading) {
+        // Merge with next chunk if same heading context
         chunks[i].text = `${chunks[i].text} ${chunks[i + 1].text}`.trim();
         chunks[i].end = chunks[i].start + chunks[i].text.length;
         chunks[i].length = chunks[i].text.length;
         chunks.splice(i + 1, 1);
-        // do not increment i; re-check against minSize in case still small
         continue;
-      } else if (i - 1 >= 0) {
-        // Merge with previous if this is the last chunk
+      } else if (i - 1 >= 0 && chunks[i - 1].heading === chunks[i].heading) {
+        // Merge with previous if this is the last or next has different heading
         chunks[i - 1].text = `${chunks[i - 1].text} ${chunks[i].text}`.trim();
         chunks[i - 1].end = chunks[i - 1].start + chunks[i - 1].text.length;
         chunks[i - 1].length = chunks[i - 1].text.length;
         chunks.splice(i, 1);
-        // Move index back to re-validate previous
         i = Math.max(0, i - 1);
         continue;
       }
@@ -386,7 +449,7 @@ async function ensureCollection() {
     const collectionExists = collections.collections.some(c => c.name === collectionName);
 
     // Determine vector size based on embedding provider
-    let vectorSize = 768; // Default for Google text-embedding-004
+    let vectorSize = 768; // Default fallback
     if (EMBEDDING_PROVIDER === 'ollama') {
       // Test Ollama connection and get vector size
       const isConnected = await testOllamaConnection();
@@ -401,6 +464,17 @@ async function ensureCollection() {
         log(`📏 Ollama model '${OLLAMA_MODEL}' produces ${vectorSize}-dimensional vectors`);
       } catch (error) {
         log(`⚠️  Could not determine vector size, using default 768`, 'warning');
+      }
+    } else {
+      // Determine vector size for Google model by embedding a test string
+      try {
+        const test = await embed({ model: embeddingModel, value: 'test' });
+        if (test && Array.isArray(test.embedding)) {
+          vectorSize = test.embedding.length;
+          log(`📏 Google model produces ${vectorSize}-dimensional vectors`);
+        }
+      } catch (error) {
+        log(`⚠️  Could not determine Google vector size automatically, using default ${vectorSize}. Error: ${error.message}`, 'warning');
       }
     }
 
@@ -418,6 +492,15 @@ async function ensureCollection() {
     const collInfo = await client.getCollection(collectionName);
     expectedVectorSize = collInfo.config?.params?.vectors?.size || vectorSize;
     log(`Collection '${collectionName}' is ready (vector size: ${expectedVectorSize})`);
+
+    // If the existing collection size doesn't match the current model output, fail fast with a clear message
+    if (collectionExists && expectedVectorSize !== vectorSize) {
+      throw new Error(
+        `Qdrant collection '${collectionName}' has dimension ${expectedVectorSize}, ` +
+        `but current model outputs ${vectorSize}. ` +
+        `Please drop and recreate the collection with size ${vectorSize} (or set a new collection name).`
+      );
+    }
   } catch (error) {
     log(`Collection initialization error: ${error.message}`, 'error');
     throw error;
@@ -592,7 +675,10 @@ async function processFile(filePath) {
     const text = normalizeText(data.text);
 
     // Use optimized chunking with paragraph awareness
-    const optimizedChunks = findOptimalChunkBoundaries(text, chunkSize, chunkOverlap);
+    const optimizedChunks = findOptimalChunkBoundaries(text, chunkSize, chunkOverlap, {
+      minFactor: minChunkFactor,
+      maxFactor: maxChunkFactor
+    });
 
     log(`Processing ${path.basename(normalizedPath)}: ${optimizedChunks.length} optimized chunks`);
 
@@ -610,6 +696,9 @@ async function processFile(filePath) {
     const displaySource = path.basename(normalizedPath);
     const points = optimizedChunks.map((chunkData, idx) => {
       const metadata = extractMetadata(displaySource, chunkData.text, idx, optimizedChunks.length);
+      if (chunkData.heading) {
+        metadata.sectionHeading = chunkData.heading;
+      }
       // Generate a valid Qdrant ID (UUIDv4) and keep a deterministic hash for dedupe/traceability
       const deterministicHash = crypto.createHash('sha1').update(`${normalizedPath}|${idx}|optimized`).digest('hex');
       const pointId = crypto.randomUUID();
@@ -714,7 +803,7 @@ async function main() {
       log(`🦙 Ollama Model: ${OLLAMA_MODEL}`);
       log(`🌐 Ollama URL: ${OLLAMA_URL}`);
     } else {
-      log(`🔍 Google Model: text-embedding-004`);
+      log(`🔍 Google Model: gemini-embedding-001`);
     }
     log(`📄 Paragraph Awareness: Enabled`);
 
