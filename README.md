@@ -2,6 +2,8 @@
 
 A sophisticated Next.js chatbot application powered by Google's Gemini AI with full Qdrant Cloud integration for Retrieval Augmented Generation (RAG), memory persistence, and advanced conversation controls. Features comprehensive source visibility, customizable system prompts, and intuitive RAG parameter management.
 
+![alttext](https://github.com/sak2k-bio/simple-rag-chatbot/blob/007c08a7d2fc14bc72973e6bd65e9d532e49a6d4/screenshots_examples/Screenshot%202025-09-01%20201014.png)
+
 ## ✨ Features
 
 🤖 **AI-Powered Conversations**: Advanced conversations using Google Gemini 1.5 Flash
